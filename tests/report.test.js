@@ -15,7 +15,7 @@ const { DIMENSIONS } = require("../lib/judge");
 
 // =============================================================================
 // Fixture builders -- synthetic per-run metric records in the documented
-// shape (see bench/lib/report.js doc comment): one record per scenario, each
+// shape (see lib/report.js doc comment): one record per scenario, each
 // carrying `runs_per_cell` runs, each run holding {ideas, brainstorming,
 // tierC}. Numbers are hand-chosen, not randomized, so every assertion below
 // is exact and reproducible.

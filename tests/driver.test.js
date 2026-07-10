@@ -277,7 +277,7 @@ test("an executor error ends the session with ended_by 'error' and still writes 
 
 // --- transcript.json written to the documented path/shape ------------------
 
-test("transcript.json is written to bench/runs/<scenario>/<workflow>/run<N>/transcript.json with the documented shape", async () => {
+test("transcript.json is written to runs/<scenario>/<workflow>/run<N>/transcript.json with the documented shape", async () => {
   const runIndex = nextRunIndex();
   const exec = createFakeExec([
     { text: "Final spec ready, please approve.", usage: { output_tokens: 10 }, writeSpec: "docs/specs/final.md" },
@@ -468,7 +468,7 @@ test("buildSpawnPlan on win32 with no resolvable launcher still routes claude.cm
 
 // --- canonical fixture consumed by downstream (metrics) tasks --------------
 
-test("bench/fixtures/transcript-sample.json matches the documented transcript shape and is internally consistent", () => {
+test("fixtures/transcript-sample.json matches the documented transcript shape and is internally consistent", () => {
   const samplePath = path.join(BENCH_ROOT, "fixtures", "transcript-sample.json");
   const sample = JSON.parse(fs.readFileSync(samplePath, "utf8"));
 

@@ -1,0 +1,11 @@
+{
+  "name": "ideas-bench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paired simulated-user benchmark: ideas plugin /ideas:interview vs superpowers:brainstorming.",
+  "author": "MisterVitoPro",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  }
+}

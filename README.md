@@ -1,11 +1,12 @@
-# bench
+# ideas-bench
 
 The paired, blind, simulated-user benchmark comparing `/ideas:interview` against
-`superpowers:brainstorming`, per the design spec's measurement section
-(`docs/specs/2026-07-08-ideas-design.md`, section 13).
+`superpowers:brainstorming`, per the ideas plugin's design spec measurement section
+([docs/specs/2026-07-08-ideas-design.md, section 13](https://github.com/MisterVitoPro/ideas/blob/main/docs/specs/2026-07-08-ideas-design.md)).
+By MisterVitoPro.
 
-`bench/` is dev tooling for this repo, not part of the plugin payload it ships -- it
-does not participate in the plugin's version bump. `bench/runs/` (all generated run
+This harness lives in its own repo so the [ideas plugin](https://github.com/MisterVitoPro/ideas)
+ships lean -- installers pull none of this tooling. `runs/` (all generated run
 output: transcripts, per-run metrics, `report.md`) is gitignored -- never commit it.
 
 ## Prerequisites
@@ -20,7 +21,7 @@ output: transcripts, per-run metrics, `report.md`) is gitignored -- never commit
 
 ## Run matrix
 
-For each of the 6 shipped scenarios (`bench/scenarios/s01-s06`, see `scenarios/SCHEMA.md`)
+For each of the 6 shipped scenarios (`scenarios/s01-s06`, see `scenarios/SCHEMA.md`)
 x each of the 2 workflows (`ideas`, `brainstorming`) x `config.runs_per_cell` (3) runs =
 **36 sessions** for a full pass at the current pilot scale. The design spec's target is
 N = 15-20 scenarios; shipping with 6 is a deliberate pilot (see Caveats below and the
@@ -30,21 +31,21 @@ scenarios **PILOT**, never silently presenting pilot numbers as the real thing.
 ## CLI
 
 ```
-node bench/run.js <run|score|report> [--scenario <id>] [--workflow <ideas|brainstorming>] [--dry-run]
+node run.js <run|score|report> [--scenario <id>] [--workflow <ideas|brainstorming>] [--dry-run]
 ```
 
 - **`run`** -- drives `config.runs_per_cell` sessions per scenario x workflow cell
-  (`bench/lib/driver.js`'s `runSession`), writing `bench/runs/<scenario>/<workflow>/run<N>/transcript.json`.
+  (`lib/driver.js`'s `runSession`), writing `runs/<scenario>/<workflow>/run<N>/transcript.json`.
 - **`score`** -- computes tier A (deterministic, no model calls), tier B (one judge call
   per scenario/workflow/run), and tier C (one masked, order-swapped judge comparison per
   scenario/run -- **paired** across both workflows' specs for that run index, so it only
   runs when both workflows are in scope of the same `score` invocation, i.e. `--workflow`
   was not used to filter to a single side for that invocation) over already-`run`
   transcripts. Writes `metrics.json` next to each transcript, and
-  `bench/runs/<scenario>/run<N>/tierC.json`. When only one workflow is in scope, `score`
+  `runs/<scenario>/run<N>/tierC.json`. When only one workflow is in scope, `score`
   logs the skip and names the condition rather than silently omitting tier C.
-- **`report`** -- aggregates every `metrics.json` + `tierC.json` under `bench/runs/`, runs
-  the paired statistics (`bench/lib/report.js`), and writes `bench/runs/report.md`. `report`
+- **`report`** -- aggregates every `metrics.json` + `tierC.json` under `runs/`, runs
+  the paired statistics (`lib/report.js`), and writes `runs/report.md`. `report`
   always aggregates both workflows (it is a paired comparison by construction); passing
   `--workflow` to it logs a one-line warning that the flag is ignored.
 
@@ -58,9 +59,9 @@ without spending a token or needing `ideas`/`superpowers` actually installed.
 A typical full pass:
 
 ```
-node bench/run.js run
-node bench/run.js score
-node bench/run.js report
+node run.js run
+node run.js score
+node run.js report
 ```
 
 ## Cost expectations
@@ -79,10 +80,10 @@ is reported -- including metrics where brainstorming wins (see `report.md`'s Tie
 tables). Two things are documented heuristics, not ground truth, and are labeled as such
 in code comments and in `report.md`:
 
-- **Two question-count heuristics exist.** `bench/lib/driver.js`'s live `countQuestions`
+- **Two question-count heuristics exist.** `lib/driver.js`'s live `countQuestions`
   (used while a session is running, to decide nothing behaviorally -- it only feeds
   `transcript.totals.questions_asked`) counts **numbered lines only** (`"1. ...?"`).
-  `bench/lib/metrics.js`'s `tierA().questions_asked` -- computed post-hoc, once the full
+  `lib/metrics.js`'s `tierA().questions_asked` -- computed post-hoc, once the full
   transcript is on disk -- counts numbered lines **plus** inline prose questions (e.g.
   `"Should it support Windows? And macOS?"`). **`report.md` uses tier A's post-hoc count
   as THE questions-asked metric.** The driver's live transcript total
@@ -94,13 +95,13 @@ in code comments and in `report.md`:
   precisely defined "minimum needed" in the spec. This harness uses a documented proxy:
   `minimumNeeded(scenario.meta)` = the scenario's planted-fact count plus its seeded
   ambiguity count -- the smallest set of things a perfect interviewer would need to ask
-  about to resolve every fact and ambiguity. See `bench/lib/report.js`'s `minimumNeeded`.
+  about to resolve every fact and ambiguity. See `lib/report.js`'s `minimumNeeded`.
 - **Tier B's "information gain per question"** (also named in spec section 13) is **not**
-  computed -- `bench/lib/metrics.js`'s `tierB()` returns `active_pct`, `critical_coverage`,
+  computed -- `lib/metrics.js`'s `tierB()` returns `active_pct`, `critical_coverage`,
   and the silent/flagged assumption lists only. Rather than fabricate a number with no
   underlying judge call behind it, `report.md` reports assumption honesty instead, as the
   real counts of silent vs. flagged assumptions per spec (from the same tier B judge call).
-- **The primary cost metric is assistant-only.** `bench/lib/metrics.js`'s `tierA()` computes
+- **The primary cost metric is assistant-only.** `lib/metrics.js`'s `tierA()` computes
   `output_tokens` (the metric the success bar's ">=30% fewer output tokens" bar and
   `report.md`'s Tier A table both use) from **assistant-role turns only** -- the
   interviewee's own token spend. It deliberately excludes the simulated user's reply
@@ -119,14 +120,14 @@ metric of the whole benchmark") for a subset of 6-8 scenarios. **This version of
 harness does not automate tier D.** It is a manual procedure:
 
 1. For each scenario in the tier D subset, take the spec each workflow produced for one
-   run (from `bench/runs/<scenario>/<workflow>/run<N>/workspace/<spec_path>`).
+   run (from `runs/<scenario>/<workflow>/run<N>/workspace/<spec_path>`).
 2. Feed each spec, with no access to the scenario's `hidden-doc.md`, to the same fixed
    executor (a `claude -p` session, or whatever downstream implementer you're holding
    constant across both sides).
 3. Run the scenario's held-out `acceptance.md` checklist against what got built.
 4. Record `{scenarioId, ideas_pass, brainstorming_pass}` for each scenario into a JSON
-   array and save it to `bench/runs/tier-d-results.json`.
-5. Re-run `node bench/run.js report` -- it detects the file and renders the Tier D
+   array and save it to `runs/tier-d-results.json`.
+5. Re-run `node run.js report` -- it detects the file and renders the Tier D
    section with the paired pass-rate table and an exact-binomial (sign test) p-value.
    Without that file, `report.md` renders Tier D as **"not run"**, plainly, rather than
    silently omitting the section or implying a null result is a loss.
@@ -142,7 +143,7 @@ version probe) the installed `claude` CLI version and `superpowers` plugin versi
 recorded as `null (unavailable)`, never guessed. Note this is narrower than "zero process
 spawn" for `--dry-run` overall: `--dry-run` spawns no model calls and no `claude` CLI
 process at all, but `git init` still runs per sandbox workspace on every run (dry-run
-included, see `bench/lib/driver.js`'s `tryGitInit`) -- best-effort, never a hard dependency.
+included, see `lib/driver.js`'s `tryGitInit`) -- best-effort, never a hard dependency.
 
 ## Pre-declared success bar
 
@@ -194,11 +195,11 @@ report, not just this file:
   complete count versus a lower bound, rather than claiming completeness the data doesn't
   support.
 - **Usage coverage.** Every `report.md` records, per side, `runs with complete
-  assistant-turn usage / total scored runs` (see `bench/lib/metrics.js`'s
-  `tierA().output_tokens_complete` and `bench/lib/report.js`'s `usageCoverageForSide`).
+  assistant-turn usage / total scored runs` (see `lib/metrics.js`'s
+  `tierA().output_tokens_complete` and `lib/report.js`'s `usageCoverageForSide`).
   This is the counter the token-accounting caveat above refers to.
 - **Judge temperature cannot be pinned via the CLI.** `claude -p --output-format json`
-  exposes no temperature/sampling-control flag (see `bench/lib/judge.js`'s
+  exposes no temperature/sampling-control flag (see `lib/judge.js`'s
   `DETERMINISM_INSTRUCTION`), so the spec's pre-declared "judge at temperature 0" cannot
   be set through the CLI. Every judge call instead carries an explicit in-prompt
   instruction to answer as deterministically as possible -- a best-effort approximation,
@@ -207,7 +208,7 @@ report, not just this file:
 ## Tests
 
 ```
-node --test "bench/tests/*.test.js"
+node --test "tests/*.test.js"
 ```
 
 (Pass the glob or explicit file paths -- a bare directory argument to `node --test` does

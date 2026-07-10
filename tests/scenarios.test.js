@@ -19,7 +19,7 @@ const REQUIRED_DOMAINS = [
   "game feature",
 ];
 
-test("loadScenarios returns exactly 6 scenarios from bench/scenarios", () => {
+test("loadScenarios returns exactly 6 scenarios from scenarios", () => {
   const scenarios = loadScenarios(SCENARIOS_DIR);
   assert.strictEqual(scenarios.length, 6, "expected exactly 6 shipped scenarios");
 });
