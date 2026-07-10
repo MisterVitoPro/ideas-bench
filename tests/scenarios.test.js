@@ -152,3 +152,74 @@ test("malformed scenario throws a named ScenarioValidationError listing every vi
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test("scenario dir missing all three files throws with a violation per missing file", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bench-scenario-missing-"));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, "empty-scenario"));
+
+    assert.throws(
+      () => loadScenarios(tmpRoot),
+      (err) => {
+        assert.strictEqual(err.name, "ScenarioValidationError");
+        const joined = err.violations.join("\n");
+        assert.match(joined, /\[empty-scenario\] missing hidden-doc\.md/);
+        assert.match(joined, /\[empty-scenario\] missing acceptance\.md/);
+        assert.match(joined, /\[empty-scenario\] missing meta\.json/);
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("scenario with corrupt meta.json reports the JSON error alongside other scenarios' violations", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bench-scenario-badjson-"));
+  try {
+    // Scenario 1: corrupt meta.json (valid other files).
+    const badJsonDir = path.join(tmpRoot, "bad-json");
+    fs.mkdirSync(badJsonDir);
+    fs.writeFileSync(path.join(badJsonDir, "hidden-doc.md"), "I want a thing built.\n");
+    fs.writeFileSync(path.join(badJsonDir, "acceptance.md"), "- [ ] the thing exists\n");
+    fs.writeFileSync(path.join(badJsonDir, "meta.json"), "{ not valid json !!!");
+
+    // Scenario 2: missing one file, so the error must span both scenarios.
+    const partialDir = path.join(tmpRoot, "partial-scenario");
+    fs.mkdirSync(partialDir);
+    fs.writeFileSync(path.join(partialDir, "hidden-doc.md"), "I want another thing.\n");
+    fs.writeFileSync(
+      path.join(partialDir, "meta.json"),
+      JSON.stringify({
+        id: "partial-scenario",
+        title: "Partial",
+        domain: "CLI feature",
+        facts: [
+          { id: "f1", text: "a", weight: "critical" },
+          { id: "f2", text: "b", weight: "critical" },
+          { id: "f3", text: "c", weight: "critical" },
+          { id: "f4", text: "d", weight: "nice" },
+          { id: "f5", text: "e", weight: "nice" },
+          { id: "f6", text: "f", weight: "nice" },
+          { id: "f7", text: "g", weight: "nice" },
+          { id: "f8", text: "h", weight: "nice" },
+        ],
+        ambiguities: ["one", "two", "three"],
+        latent: ["only latent"],
+      })
+    );
+
+    assert.throws(
+      () => loadScenarios(tmpRoot),
+      (err) => {
+        assert.strictEqual(err.name, "ScenarioValidationError");
+        const joined = err.violations.join("\n");
+        assert.match(joined, /\[bad-json\] meta\.json is not valid JSON/);
+        assert.match(joined, /\[partial-scenario\] missing acceptance\.md/);
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

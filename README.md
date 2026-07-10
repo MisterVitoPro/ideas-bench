@@ -21,7 +21,10 @@ expectations, and the tier D downstream-execution procedure.
 Run the scenario tests with:
 
 ```
-node --test bench/tests/
+node --test "bench/tests/*.test.js"
 ```
+
+(Pass the glob or explicit file paths -- a bare directory argument to
+`node --test` does not resolve on this repo's Node version on Windows.)
 
 `bench/runs/` (generated run output) is gitignored -- never commit it.
