@@ -267,11 +267,17 @@ async function cmdScore({ config, opts }) {
   const workflows = selectWorkflows(config, opts.workflow);
   const exec = opts.dryRun ? makeDryRunExec() : claudeCliExec;
 
+  // Derived from config.workflows rather than hardcoded, so specsByWorkflow
+  // always has a slot for every workflow the config actually declares.
+  const allWorkflows = Object.keys(config.workflows || {});
+
   for (const scenario of scenarios) {
     // Tier B (per scenario/workflow/run) can run for whatever workflow subset
     // was requested; tier C (paired across workflows) only runs when BOTH
     // sides are in scope and both actually produced a spec for that run.
-    const specsByWorkflow = { ideas: new Array(config.runs_per_cell).fill(null), brainstorming: new Array(config.runs_per_cell).fill(null) };
+    const specsByWorkflow = Object.fromEntries(
+      allWorkflows.map((w) => [w, new Array(config.runs_per_cell).fill(null)])
+    );
 
     for (const workflow of workflows) {
       for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
@@ -281,7 +287,13 @@ async function cmdScore({ config, opts }) {
     }
 
     const bothWorkflowsInScope = workflows.includes("ideas") && workflows.includes("brainstorming");
-    if (!bothWorkflowsInScope) continue;
+    if (!bothWorkflowsInScope) {
+      console.log(
+        `[score] ${scenario.id}: tier C skipped -- both workflows must be in scope of the same score invocation ` +
+          `(got: ${workflows.join(", ") || "none"})`
+      );
+      continue;
+    }
 
     for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
       const specA = specsByWorkflow.ideas[runIndex - 1];
@@ -302,7 +314,12 @@ async function cmdScore({ config, opts }) {
 //
 // Best-effort, per the repo's honesty invariants: every field is null (never
 // fabricated) when it cannot be determined. Skipped entirely in --dry-run so
-// dry-run stays a zero-process-spawn, hermetic path.
+// dry-run never spawns the claude CLI itself for a `--version`/`plugin list`
+// probe -- dry-run spawns no model calls and no claude CLI process at all
+// (see makeDryRunExec above). This is narrower than "zero process spawn"
+// overall: git init still runs per sandbox workspace on every run, dry-run
+// included (see driver.js's tryGitInit), best-effort and never a hard
+// dependency.
 function getPinnedVersions({ dryRun }) {
   let ideas = null;
   try {
@@ -341,6 +358,13 @@ function loadTierDResults() {
 }
 
 async function cmdReport({ config, opts }) {
+  if (opts.workflow) {
+    console.log(
+      `[report] note: --workflow is ignored by the report command -- report always aggregates both workflows' ` +
+        `metrics (it is a paired comparison by construction). Use --workflow with run/score to scope those steps.`
+    );
+  }
+
   const scenarios = selectScenarios(opts.scenario);
 
   const reportScenarios = scenarios.map((scenario) => {

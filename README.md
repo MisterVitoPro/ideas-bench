@@ -38,15 +38,21 @@ node bench/run.js <run|score|report> [--scenario <id>] [--workflow <ideas|brains
 - **`score`** -- computes tier A (deterministic, no model calls), tier B (one judge call
   per scenario/workflow/run), and tier C (one masked, order-swapped judge comparison per
   scenario/run -- **paired** across both workflows' specs for that run index, so it only
-  runs once both sides' transcripts exist) over already-`run` transcripts. Writes
-  `metrics.json` next to each transcript, and `bench/runs/<scenario>/run<N>/tierC.json`.
+  runs when both workflows are in scope of the same `score` invocation, i.e. `--workflow`
+  was not used to filter to a single side for that invocation) over already-`run`
+  transcripts. Writes `metrics.json` next to each transcript, and
+  `bench/runs/<scenario>/run<N>/tierC.json`. When only one workflow is in scope, `score`
+  logs the skip and names the condition rather than silently omitting tier C.
 - **`report`** -- aggregates every `metrics.json` + `tierC.json` under `bench/runs/`, runs
-  the paired statistics (`bench/lib/report.js`), and writes `bench/runs/report.md`.
+  the paired statistics (`bench/lib/report.js`), and writes `bench/runs/report.md`. `report`
+  always aggregates both workflows (it is a paired comparison by construction); passing
+  `--workflow` to it logs a one-line warning that the flag is ignored.
 
-`--scenario <id>` and `--workflow <ideas|brainstorming>` filter any subcommand to one
-scenario and/or one workflow. `--dry-run` routes every subcommand through an in-process
-scripted executor instead of the real `claude` CLI: zero network calls, deterministic
-output, exit 0. Use it to validate the pipeline end to end (`run` -> `score` -> `report`)
+`--scenario <id>` and `--workflow <ideas|brainstorming>` filter the `run`/`score`
+subcommands to one scenario and/or one workflow (`report` ignores `--workflow`, see above).
+`--dry-run` routes every subcommand through an in-process scripted executor instead of the
+real `claude` CLI: zero network calls, deterministic output, exit 0. Use it to validate the
+pipeline end to end (`run` -> `score` -> `report`)
 without spending a token or needing `ideas`/`superpowers` actually installed.
 
 A typical full pass:
@@ -94,6 +100,16 @@ in code comments and in `report.md`:
   and the silent/flagged assumption lists only. Rather than fabricate a number with no
   underlying judge call behind it, `report.md` reports assumption honesty instead, as the
   real counts of silent vs. flagged assumptions per spec (from the same tier B judge call).
+- **The primary cost metric is assistant-only.** `bench/lib/metrics.js`'s `tierA()` computes
+  `output_tokens` (the metric the success bar's ">=30% fewer output tokens" bar and
+  `report.md`'s Tier A table both use) from **assistant-role turns only** -- the
+  interviewee's own token spend. It deliberately excludes the simulated user's reply
+  turns, which are an artifact of this harness's own testing methodology, not a cost
+  either workflow under test actually controls; summing every turn would silently inflate
+  the primary metric with tokens neither workflow spent. The all-turns total is kept as a
+  separate, clearly-secondary field, `output_tokens_all_roles`, rendered as its own
+  informational row in `report.md`'s Tier A table -- never fed into the primary comparison
+  or the success bar.
 
 ## Tier D — downstream outcome (not automated)
 
@@ -120,10 +136,13 @@ harness does not automate tier D.** It is a manual procedure:
 `report.md`'s "Pinned configuration" section records, best-effort, per the repo's honesty
 invariants (never fabricate; null when unavailable): the three model IDs from
 `config.json`, this repo's own `ideas` plugin version (read from `.claude-plugin/plugin.json`),
-and (skipped entirely in `--dry-run`, to keep it a zero-process-spawn path) the installed
-`claude` CLI version and `superpowers` plugin version via `claude plugin list --json` where
-that succeeds. Any field that cannot be determined is recorded as `null (unavailable)`,
-never guessed.
+and (skipped entirely in `--dry-run`, so dry-run never spawns the `claude` CLI itself for a
+version probe) the installed `claude` CLI version and `superpowers` plugin version via
+`claude plugin list --json` where that succeeds. Any field that cannot be determined is
+recorded as `null (unavailable)`, never guessed. Note this is narrower than "zero process
+spawn" for `--dry-run` overall: `--dry-run` spawns no model calls and no `claude` CLI
+process at all, but `git init` still runs per sandbox workspace on every run (dry-run
+included, see `bench/lib/driver.js`'s `tryGitInit`) -- best-effort, never a hard dependency.
 
 ## Pre-declared success bar
 
@@ -141,7 +160,10 @@ user burden" -- lower, not lower-or-equal, so an exact tie does not pass) AND (w
 `tier-d-results.json` is present) a tier D pass rate that matches or beats brainstorming.
 **WHEN the output-tokens family, the tier C composite family, or the user-burden family
 is entirely null** (every scenario's paired value missing), the verdict is
-**INSUFFICIENT-DATA** -- never a silently-favorable PASS or FAIL built on no data.
+**INSUFFICIENT-DATA** -- never a silently-favorable PASS or FAIL built on no data. When no
+`tier-d-results.json` was supplied, tier D is simply not part of the verdict -- the
+headline itself reads **"PASS (tier D not evaluated)"** or **"FAIL (tier D not
+evaluated)"**, not a bare PASS/FAIL that reads as a complete four-condition verdict.
 
 ## Caveats (also in every `report.md`)
 
@@ -164,8 +186,23 @@ report, not just this file:
   (spec appendix A.6). 2-3 scenarios must later be validated with a real human user.
 - **Token accounting is best-effort.** Counts come from the `claude` CLI's JSON `usage`
   field; a turn whose usage is missing becomes `null` and is excluded from sums -- never
-  fabricated -- with coverage counters (`output_tokens_complete`, and every paired table's
-  `n`/`dropped` columns) showing exactly how much data actually went into each number.
+  fabricated. `output_tokens` (the primary cost metric) is labeled **lower bound (usage
+  incomplete)** in `report.md`'s Tier A table whenever either side's per-run usage
+  coverage is under 100%; the paired tables' `n`/`dropped` columns show scenario-level
+  coverage, and a dedicated **Usage coverage** caveat line (see below) shows run-level
+  coverage of the primary metric itself -- together making clear when a number is a
+  complete count versus a lower bound, rather than claiming completeness the data doesn't
+  support.
+- **Usage coverage.** Every `report.md` records, per side, `runs with complete
+  assistant-turn usage / total scored runs` (see `bench/lib/metrics.js`'s
+  `tierA().output_tokens_complete` and `bench/lib/report.js`'s `usageCoverageForSide`).
+  This is the counter the token-accounting caveat above refers to.
+- **Judge temperature cannot be pinned via the CLI.** `claude -p --output-format json`
+  exposes no temperature/sampling-control flag (see `bench/lib/judge.js`'s
+  `DETERMINISM_INSTRUCTION`), so the spec's pre-declared "judge at temperature 0" cannot
+  be set through the CLI. Every judge call instead carries an explicit in-prompt
+  instruction to answer as deterministically as possible -- a best-effort approximation,
+  not a guarantee -- and every `report.md` discloses this in its Caveats section.
 
 ## Tests
 

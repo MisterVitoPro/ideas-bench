@@ -291,7 +291,34 @@ test("buildReport includes Wilcoxon p-values and null/dropped coverage counters 
 test("buildReport PASSes the success bar for the six winning scenarios and quotes the bar verbatim", () => {
   const md = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
   assert.ok(md.includes(SUCCESS_BAR_QUOTE), "the success bar text is quoted verbatim");
-  assert.match(md, /Success bar[\s\S]{0,600}\*\*Verdict: PASS\*\*/);
+  // No tier D results were supplied -- the headline itself must carry the
+  // qualifier, not just the reasons list below it.
+  assert.match(md, /Success bar[\s\S]{0,600}\*\*Verdict: PASS \(tier D not evaluated\)\*\*/);
+});
+
+test("buildReport's verdict headline carries '(tier D not evaluated)' on both PASS and FAIL when tier D was not supplied", () => {
+  const passMd = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
+  assert.match(passMd, /\*\*Verdict: PASS \(tier D not evaluated\)\*\*/);
+
+  const losingScenarios = sixWinningScenarios().map((s) => ({
+    ...s,
+    runs: s.runs.map((r) => ({
+      ...r,
+      ideas: { ...r.ideas, tierA: { ...r.ideas.tierA, output_tokens: r.brainstorming.tierA.output_tokens } },
+    })),
+  }));
+  const failMd = buildReport({ scenarios: losingScenarios, tierD: null, config: CONFIG, versions: {} });
+  assert.match(failMd, /\*\*Verdict: FAIL \(tier D not evaluated\)\*\*/);
+});
+
+test("buildReport's verdict headline carries no qualifier when tier D results are supplied", () => {
+  const tierD = [
+    { scenarioId: "s01", ideas_pass: true, brainstorming_pass: false },
+    { scenarioId: "s02", ideas_pass: true, brainstorming_pass: true },
+  ];
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD, config: CONFIG, versions: {} });
+  assert.match(md, /\*\*Verdict: PASS\*\*/);
+  assert.doesNotMatch(md, /tier D not evaluated/);
 });
 
 test("buildReport labels a run with fewer than 15 scenarios PILOT (no silent caps)", () => {
@@ -345,6 +372,76 @@ test("buildReport's Caveats section records pinned versions best-effort, with nu
   });
   assert.ok(md.includes("0.2.0"));
   assert.match(md, /superpowers[\s\S]{0,40}(null|unavailable|unknown)/i);
+});
+
+// =============================================================================
+// MUST FIX 1: output_tokens_complete propagates to the report as a per-side
+// usage-coverage counter; the output_tokens row is labeled a lower bound
+// when coverage is under 100%, and the success bar's token condition still
+// computes normally (labeled, not blocked).
+// =============================================================================
+
+test("buildReport does not label output_tokens a lower bound when every run reports complete usage", () => {
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
+  const tokenLabel = TIER_A_METRICS.find((m) => m.key === "output_tokens").label;
+  const tokenLine = md.split("\n").find((l) => l.includes(tokenLabel));
+  assert.ok(tokenLine, "output_tokens row is present");
+  assert.doesNotMatch(tokenLine, /lower bound \(usage incomplete\)/, "the row itself carries no lower-bound label at 100% coverage");
+  assert.match(md, /ideas: 18\/18 scored run\(s\) \(100\.0%\) reported complete usage/);
+  assert.match(md, /brainstorming: 18\/18 scored run\(s\) \(100\.0%\) reported complete usage/);
+});
+
+test("buildReport labels output_tokens a lower bound and surfaces the usage-coverage counter when a run has partial usage", () => {
+  const scenarios = sixWinningScenarios();
+  // One of ideas' 18 runs (6 scenarios x 3 runs) reports incomplete usage.
+  scenarios[0].runs[0] = {
+    ...scenarios[0].runs[0],
+    ideas: {
+      ...scenarios[0].runs[0].ideas,
+      tierA: { ...scenarios[0].runs[0].ideas.tierA, output_tokens_complete: false },
+    },
+  };
+
+  const md = buildReport({ scenarios, tierD: null, config: CONFIG, versions: {} });
+
+  const tokenLabel = TIER_A_METRICS.find((m) => m.key === "output_tokens").label;
+  const tokenLine = md.split("\n").find((l) => l.includes(tokenLabel));
+  assert.ok(tokenLine, "output_tokens row is present");
+  assert.match(tokenLine, /lower bound \(usage incomplete\)/, "the row itself carries the lower-bound label");
+
+  assert.match(md, /ideas: 17\/18 scored run\(s\) \(94\.4%\) reported complete usage/);
+  assert.match(md, /brainstorming: 18\/18 scored run\(s\) \(100\.0%\) reported complete usage/);
+
+  // The success bar's token condition still computes (labeled, not blocked)
+  // -- partial usage coverage does not force INSUFFICIENT-DATA or drop the
+  // token condition out of the verdict.
+  assert.doesNotMatch(md, /INSUFFICIENT-DATA/);
+  assert.match(md, /Token reduction: [\d.]+% \(bar: >=30%\) -- (PASS|FAIL)/);
+});
+
+// =============================================================================
+// MUST FIX 2: judge temperature cannot be pinned via the CLI -- the caveat
+// must reach the generated report, not just judge.js's code comment.
+// =============================================================================
+
+test("buildReport's Caveats section discloses that judge temperature cannot be pinned via the CLI", () => {
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
+  const caveats = md.split("## Caveats")[1];
+  assert.match(caveats, /temperature/i);
+  assert.match(caveats, /cannot be pinned/i);
+  assert.match(caveats, /no temperature/i);
+});
+
+// =============================================================================
+// MINOR 6: tier C composite row is labeled "mean of available dimensions",
+// not "all 5" -- a dimension that failed its judge call is excluded, not
+// silently averaged in as if every dimension always succeeds.
+// =============================================================================
+
+test("buildReport's tier C composite row is labeled 'mean of available dimensions', not 'all 5'", () => {
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
+  assert.match(md, /Composite \(mean of available dimensions\)/);
+  assert.doesNotMatch(md, /mean of all 5 dimensions/);
 });
 
 test("buildReport never claims completeness beyond what coverage counters support (dropped scenarios are visible)", () => {

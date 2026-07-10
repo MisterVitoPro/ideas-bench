@@ -67,10 +67,19 @@ test("tierA computed from the good-elicitation fixture transcript: exact tokens/
   const result = tierA(TRANSCRIPT_A);
   assert.strictEqual(result.turns, TRANSCRIPT_A.turns.length);
   assert.strictEqual(result.turns, 6);
-  assert.strictEqual(result.output_tokens_complete, true, "every turn in transcript-a.json carries usage");
+  assert.strictEqual(result.output_tokens_complete, true, "every assistant turn in transcript-a.json carries usage");
 
-  const expectedTokens = TRANSCRIPT_A.turns.reduce((sum, t) => sum + t.usage.output_tokens, 0);
-  assert.strictEqual(result.output_tokens, expectedTokens);
+  // output_tokens (the primary cost metric) is assistant-only -- it excludes
+  // the three sim-user reply turns' tokens.
+  const expectedAssistantTokens = TRANSCRIPT_A.turns
+    .filter((t) => t.role === "assistant")
+    .reduce((sum, t) => sum + t.usage.output_tokens, 0);
+  assert.strictEqual(result.output_tokens, expectedAssistantTokens);
+
+  // output_tokens_all_roles is the secondary, informational all-turns total.
+  const expectedAllRolesTokens = TRANSCRIPT_A.turns.reduce((sum, t) => sum + t.usage.output_tokens, 0);
+  assert.strictEqual(result.output_tokens_all_roles, expectedAllRolesTokens);
+  assert.ok(result.output_tokens < result.output_tokens_all_roles, "assistant-only total excludes sim-user tokens");
 
   // 4 numbered questions in the first assistant turn, 3 in the second, 0 in the third.
   assert.strictEqual(result.questions_asked, 7);
@@ -81,17 +90,44 @@ test("tierA computed from the good-elicitation fixture transcript: exact tokens/
   assert.strictEqual(result.user_burden_tokens, Math.round(expectedUserChars / 4));
 });
 
-test("tierA marks output_tokens_complete false when any turn's usage is null (poor-elicitation fixture)", () => {
+test("tierA output_tokens counts assistant turns only -- the poor-elicitation fixture's null-usage turn is a sim-user turn, so the assistant-only primary metric is still complete", () => {
   const result = tierA(TRANSCRIPT_B);
-  assert.strictEqual(result.output_tokens_complete, false);
-  // The null-usage turn (user turn 2, "Sure, sounds fine.") contributes 0, not a guess.
-  const expectedTokens = TRANSCRIPT_B.turns.reduce(
+  // transcript-b.json's null-usage turn is role "user" (sim-user), not
+  // "assistant" -- both of its assistant turns carry usage, so the
+  // assistant-only primary metric reports complete coverage.
+  assert.strictEqual(result.output_tokens_complete, true);
+  const expectedAssistantTokens = TRANSCRIPT_B.turns
+    .filter((t) => t.role === "assistant")
+    .reduce((sum, t) => sum + t.usage.output_tokens, 0);
+  assert.strictEqual(result.output_tokens, expectedAssistantTokens);
+
+  // output_tokens_all_roles still includes the null-usage user turn,
+  // contributing 0 to that secondary total -- never fabricated.
+  const expectedAllRolesTokens = TRANSCRIPT_B.turns.reduce(
     (sum, t) => sum + (t.usage && typeof t.usage.output_tokens === "number" ? t.usage.output_tokens : 0),
     0
   );
-  assert.strictEqual(result.output_tokens, expectedTokens);
+  assert.strictEqual(result.output_tokens_all_roles, expectedAllRolesTokens);
+  assert.ok(
+    result.output_tokens_all_roles > result.output_tokens,
+    "all-roles total is not simply equal to the assistant-only total here"
+  );
   assert.strictEqual(result.turns, 4);
   assert.strictEqual(result.questions_asked, 1);
+});
+
+test("tierA marks output_tokens_complete false when an ASSISTANT turn's usage is null -- the primary metric's own coverage, distinct from output_tokens_all_roles", () => {
+  const transcript = {
+    turns: [
+      { role: "assistant", text: "1. What flag name?", usage: null },
+      { role: "user", text: "Call it --timeout.", usage: { output_tokens: 10 } },
+      { role: "assistant", text: "Spec ready, please approve.", usage: { output_tokens: 40 } },
+    ],
+  };
+  const result = tierA(transcript);
+  assert.strictEqual(result.output_tokens_complete, false);
+  assert.strictEqual(result.output_tokens, 40, "the null-usage assistant turn contributes 0, never fabricated");
+  assert.strictEqual(result.output_tokens_all_roles, 50, "all-roles total still sums every usable turn");
 });
 
 test("tierA on a zero-turn transcript reports output_tokens_complete false, not vacuously true", () => {
@@ -99,6 +135,7 @@ test("tierA on a zero-turn transcript reports output_tokens_complete false, not 
   assert.strictEqual(result.turns, 0);
   assert.strictEqual(result.output_tokens_complete, false);
   assert.strictEqual(result.output_tokens, 0);
+  assert.strictEqual(result.output_tokens_all_roles, 0);
   assert.strictEqual(result.questions_asked, 0);
   assert.strictEqual(result.user_burden_tokens, 0);
 });
