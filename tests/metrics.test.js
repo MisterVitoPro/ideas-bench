@@ -334,6 +334,29 @@ test("tierC states length is not quality in every dimension prompt", () => {
   assert.match(prompt, /[Ll]ength is not quality/);
 });
 
+// Carried note from the Task 4 review: judge.js's dimension descriptions were
+// one-liners; design spec section 13 requires "anchored rubric levels" for
+// tier C. Every dimension prompt must ground the judge with anchors for the
+// worst (1), middle (3), and best (5) levels -- pinned here so the anchors
+// can never silently regress back to bare one-liners.
+test("every tier C dimension prompt contains anchored rubric levels for 1, 3, and 5", () => {
+  const { DIMENSION_DESCRIPTIONS } = require("../lib/judge");
+  for (const dimension of DIMENSIONS) {
+    const prompt = buildDimensionJudgePrompt({ dimension, doc1: "Document one text.", doc2: "Document two text." });
+    assert.match(prompt, /Score anchors/i, `${dimension} prompt introduces score anchors`);
+    for (const level of [1, 3, 5]) {
+      const anchorText = DIMENSION_DESCRIPTIONS[dimension].anchors[level];
+      assert.ok(
+        typeof anchorText === "string" && anchorText.length > 0,
+        `${dimension} has a non-empty anchor for level ${level}`
+      );
+      assert.ok(!anchorText.includes("\n"), `${dimension} level ${level} anchor is one line`);
+      assert.ok(prompt.includes(anchorText), `${dimension} prompt includes its level ${level} anchor text verbatim`);
+      assert.match(prompt, new RegExp(`${level} -- `), `${dimension} prompt labels level ${level} explicitly`);
+    }
+  }
+});
+
 test("tierC isolates a failed dimension to null+error without affecting the other four", async () => {
   const steps = honestSilentScript();
   // "consistency" is DIMENSION_SCORES[3] -> steps[6] and steps[7]; fail its first call.
