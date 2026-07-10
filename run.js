@@ -29,9 +29,35 @@ const { buildReport } = require("./lib/report");
 const BENCH_ROOT = __dirname;
 const REPO_ROOT = path.join(BENCH_ROOT, "..");
 const RUNS_ROOT = path.join(BENCH_ROOT, "runs");
+// --dry-run drives run/score/report through this completely separate root,
+// end to end (driver sandbox/transcript paths, score inputs/outputs, report
+// input+output) -- dry-run and real artifacts must never share a directory
+// tree, so a later real `report` can never silently aggregate stale
+// dry-run scenarios alongside real ones (see checkForDryRunContamination
+// below for the belt-and-braces check on top of this segregation).
+const RUNS_DRY_ROOT = path.join(BENCH_ROOT, "runs-dry");
 const SCENARIOS_DIR = path.join(BENCH_ROOT, "scenarios");
 const CONFIG_PATH = path.join(BENCH_ROOT, "config.json");
-const TIER_D_RESULTS_PATH = path.join(RUNS_ROOT, "tier-d-results.json");
+
+// runsRootFor(dryRun) -> RUNS_DRY_ROOT | RUNS_ROOT
+function runsRootFor(dryRun) {
+  return dryRun ? RUNS_DRY_ROOT : RUNS_ROOT;
+}
+
+function tierDResultsPath(root) {
+  return path.join(root, "tier-d-results.json");
+}
+
+// DryRunContaminationError -- named error type for the belt-and-braces
+// check in cmdReport: real-mode report refuses to run if it finds a
+// transcript under runs/ marked dry_run:true. Never thrown for the reverse
+// (a real transcript found under runs-dry/) -- that's harmless and ignored.
+class DryRunContaminationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "DryRunContaminationError";
+  }
+}
 
 const COMMANDS = ["run", "score", "report"];
 const WORKFLOWS = ["ideas", "brainstorming"];
@@ -185,20 +211,25 @@ function selectWorkflows(config, workflowFilter) {
   return [workflowFilter];
 }
 
-function runDir(scenarioId, workflow, runIndex) {
-  return path.join(RUNS_ROOT, scenarioId, workflow, `run${runIndex}`);
+// Every path helper below takes `root` explicitly (RUNS_ROOT or
+// RUNS_DRY_ROOT, per runsRootFor(opts.dryRun)) rather than closing over a
+// single module-level constant -- this is what makes dry-run segregation
+// end to end possible: every command threads the same root through its
+// reads and writes.
+function runDir(root, scenarioId, workflow, runIndex) {
+  return path.join(root, scenarioId, workflow, `run${runIndex}`);
 }
 
-function transcriptPath(scenarioId, workflow, runIndex) {
-  return path.join(runDir(scenarioId, workflow, runIndex), "transcript.json");
+function transcriptPath(root, scenarioId, workflow, runIndex) {
+  return path.join(runDir(root, scenarioId, workflow, runIndex), "transcript.json");
 }
 
-function metricsPath(scenarioId, workflow, runIndex) {
-  return path.join(runDir(scenarioId, workflow, runIndex), "metrics.json");
+function metricsPath(root, scenarioId, workflow, runIndex) {
+  return path.join(runDir(root, scenarioId, workflow, runIndex), "metrics.json");
 }
 
-function tierCPath(scenarioId, runIndex) {
-  return path.join(RUNS_ROOT, scenarioId, `run${runIndex}`, "tierC.json");
+function tierCPath(root, scenarioId, runIndex) {
+  return path.join(root, scenarioId, `run${runIndex}`, "tierC.json");
 }
 
 function readJSONIfExists(p) {
@@ -209,10 +240,13 @@ function readJSONIfExists(p) {
   }
 }
 
-function readSpecText(transcript) {
+function readSpecText(root, transcript) {
   const specPath = transcript && transcript.artifact && transcript.artifact.spec_path;
   if (!specPath) return null;
-  const workspaceDir = path.join(path.dirname(transcriptPath(transcript.scenario, transcript.workflow, transcript.run)), "workspace");
+  const workspaceDir = path.join(
+    path.dirname(transcriptPath(root, transcript.scenario, transcript.workflow, transcript.run)),
+    "workspace"
+  );
   try {
     // Ingestion seam: the produced spec is a file written inside the sandbox
     // workspace, so on Windows it may carry CRLF -- normalize here so both
@@ -230,12 +264,21 @@ async function cmdRun({ config, opts }) {
   const scenarios = selectScenarios(opts.scenario);
   const workflows = selectWorkflows(config, opts.workflow);
   const exec = opts.dryRun ? makeDryRunExec() : claudeCliExec;
+  const root = runsRootFor(opts.dryRun);
 
   let count = 0;
   for (const scenario of scenarios) {
     for (const workflow of workflows) {
       for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
-        const transcript = await runSession({ scenario, workflow, runIndex, config, exec });
+        const transcript = await runSession({
+          scenario,
+          workflow,
+          runIndex,
+          config,
+          exec,
+          runsRoot: root,
+          dryRun: opts.dryRun,
+        });
         count += 1;
         console.log(`[run] ${scenario.id}/${workflow}/run${runIndex}: ended_by=${transcript.ended_by}`);
       }
@@ -244,8 +287,8 @@ async function cmdRun({ config, opts }) {
   console.log(`[run] complete: ${count} session(s) driven${opts.dryRun ? " (dry-run, zero network)" : ""}.`);
 }
 
-async function scoreOneRun({ scenario, workflow, runIndex, config, exec }) {
-  const tPath = transcriptPath(scenario.id, workflow, runIndex);
+async function scoreOneRun({ scenario, workflow, runIndex, config, exec, root }) {
+  const tPath = transcriptPath(root, scenario.id, workflow, runIndex);
   const transcript = readJSONIfExists(tPath);
   if (!transcript) {
     console.log(`[score] ${scenario.id}/${workflow}/run${runIndex}: no transcript.json -- skipped (run it first)`);
@@ -253,11 +296,11 @@ async function scoreOneRun({ scenario, workflow, runIndex, config, exec }) {
   }
 
   const a = computeTierA(transcript);
-  const spec = readSpecText(transcript);
+  const spec = readSpecText(root, transcript);
   const b = await computeTierB({ scenario, transcript, spec, exec, model: config.judge_model });
 
   const metrics = { scenario: scenario.id, workflow, run: runIndex, tierA: a, tierB: b, spec_present: spec !== null };
-  fs.writeFileSync(metricsPath(scenario.id, workflow, runIndex), JSON.stringify(metrics, null, 2) + "\n");
+  fs.writeFileSync(metricsPath(root, scenario.id, workflow, runIndex), JSON.stringify(metrics, null, 2) + "\n");
   console.log(
     `[score] ${scenario.id}/${workflow}/run${runIndex}: tierA.output_tokens=${a.output_tokens} tierB.active_pct=${
       b.active_pct === null ? "null" : b.active_pct.toFixed(2)
@@ -270,6 +313,7 @@ async function cmdScore({ config, opts }) {
   const scenarios = selectScenarios(opts.scenario);
   const workflows = selectWorkflows(config, opts.workflow);
   const exec = opts.dryRun ? makeDryRunExec() : claudeCliExec;
+  const root = runsRootFor(opts.dryRun);
 
   // Derived from config.workflows rather than hardcoded, so specsByWorkflow
   // always has a slot for every workflow the config actually declares.
@@ -285,7 +329,7 @@ async function cmdScore({ config, opts }) {
 
     for (const workflow of workflows) {
       for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
-        const result = await scoreOneRun({ scenario, workflow, runIndex, config, exec });
+        const result = await scoreOneRun({ scenario, workflow, runIndex, config, exec, root });
         if (result) specsByWorkflow[workflow][runIndex - 1] = result.spec;
       }
     }
@@ -307,10 +351,110 @@ async function cmdScore({ config, opts }) {
         continue;
       }
       const dimensions = await computeTierC({ specA, specB, exec, model: config.judge_model });
-      fs.mkdirSync(path.dirname(tierCPath(scenario.id, runIndex)), { recursive: true });
-      fs.writeFileSync(tierCPath(scenario.id, runIndex), JSON.stringify({ scenario: scenario.id, run: runIndex, dimensions }, null, 2) + "\n");
+      fs.mkdirSync(path.dirname(tierCPath(root, scenario.id, runIndex)), { recursive: true });
+      fs.writeFileSync(
+        tierCPath(root, scenario.id, runIndex),
+        JSON.stringify({ scenario: scenario.id, run: runIndex, dimensions }, null, 2) + "\n"
+      );
       console.log(`[score] ${scenario.id}/run${runIndex}: tier C scored (5 dimensions, masked + order-swapped)`);
     }
+  }
+}
+
+// --- claude plugin list parsing ---------------------------------------------
+//
+// `claude plugin list --json` returns a JSON array of entries shaped like:
+//   { "id": "<name>@<marketplace>", "version": "1.2.3" | "unknown", "scope": ..., "enabled": ..., ... }
+// There is NO separate `name` field -- the plugin's short name is the part
+// of `id` before the first "@". (Confirmed against a real installed-plugin
+// list: `claude plugin list --json` on this machine, which has both `ideas`
+// and `superpowers` installed, returns exactly this shape.) The previous
+// version of this probe looked for `p.name === "superpowers"`, which never
+// matched anything -- every entry's `name` field is undefined -- so the
+// pinned version came back null even with a real install present.
+//
+// parsePluginListJSON(jsonText) -> Array<{id, name, version}> | null
+//
+// Pure, hermetic, unit-tested against captured sample output (see
+// tests/run.test.js). Returns null (never throws) on unparseable/non-array
+// input so callers can fall back or record null, never a guess. A version
+// of the literal string "unknown" (the CLI's own placeholder for plugins
+// with no resolvable version) is normalized to null here too -- reporting
+// the word "unknown" as if it were a version string would be dishonest.
+function parsePluginListJSON(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  return parsed
+    .filter((p) => p && typeof p.id === "string")
+    .map((p) => ({
+      id: p.id,
+      name: p.id.split("@")[0],
+      version: typeof p.version === "string" && p.version !== "unknown" ? p.version : null,
+    }));
+}
+
+// parsePluginListText(text) -> Array<{id, name, version}>
+//
+// Fallback parser for the plain-text `claude plugin list` form, used only
+// when the --json form is unavailable or fails to parse. Entries look like:
+//   "  ❯ <name>@<marketplace>\n    Version: <version>\n    Scope: ...\n    Status: ..."
+// (the marker is the U+276F "heavy right-pointing angle quotation mark
+// ornament" character, "❯"). Matched leniently on any non-whitespace
+// bullet-like prefix followed by "name@marketplace" so a marker glyph swap
+// across CLI versions doesn't silently break this fallback.
+const PLUGIN_LIST_TEXT_ENTRY_RE = /^\s*\S+\s+(\S+@\S+)\s*$\n\s*Version:\s*(\S+)/gm;
+function parsePluginListText(text) {
+  const entries = [];
+  if (typeof text !== "string") return entries;
+  let m;
+  PLUGIN_LIST_TEXT_ENTRY_RE.lastIndex = 0;
+  while ((m = PLUGIN_LIST_TEXT_ENTRY_RE.exec(text))) {
+    const id = m[1];
+    const version = m[2];
+    entries.push({
+      id,
+      name: id.split("@")[0],
+      version: version && version !== "unknown" ? version : null,
+    });
+  }
+  return entries;
+}
+
+// findPluginVersion(entries, name) -> string | null
+function findPluginVersion(entries, name) {
+  if (!Array.isArray(entries)) return null;
+  const found = entries.find((e) => e.name === name);
+  return found ? found.version : null;
+}
+
+// probeInstalledPlugins() -> Array<{id, name, version}> | null
+//
+// Prefers `claude plugin list --json`; falls back to parsing the plain-text
+// `claude plugin list` form if the JSON form fails (spawn error, non-zero
+// exit, unparseable output). Never throws -- returns null when both fail.
+// This is the only function in this module that spawns the live claude CLI
+// for a plugin-list probe; it is deliberately left untested (see the doc
+// comment on getPinnedVersions) since it depends on the real, installed CLI
+// -- parsePluginListJSON/parsePluginListText carry the hermetic test
+// coverage for the parsing logic itself.
+function probeInstalledPlugins() {
+  try {
+    const out = execSync("claude plugin list --json", { encoding: "utf8", timeout: 10000 });
+    const parsed = parsePluginListJSON(out);
+    if (parsed !== null) return parsed;
+  } catch {
+    // fall through to the text-mode probe below
+  }
+  try {
+    const out = execSync("claude plugin list", { encoding: "utf8", timeout: 10000 });
+    return parsePluginListText(out);
+  } catch {
+    return null;
   }
 }
 
@@ -324,6 +468,14 @@ async function cmdScore({ config, opts }) {
 // overall: git init still runs per sandbox workspace on every run, dry-run
 // included (see driver.js's tryGitInit), best-effort and never a hard
 // dependency.
+//
+// `ideas`'s version is read from a local .claude-plugin/plugin.json first
+// (a monorepo-adjacent-checkout convenience, kept for back-compat) and only
+// falls back to the live plugin-list probe when that file isn't found --
+// e.g. this repo now lives standalone (see the "Extract bench to standalone
+// ideas-bench repo" commit), so REPO_ROOT/.claude-plugin/plugin.json no
+// longer resolves on a typical checkout, and the probe is what actually
+// finds it.
 function getPinnedVersions({ dryRun }) {
   let ideas = null;
   try {
@@ -343,22 +495,46 @@ function getPinnedVersions({ dryRun }) {
     claude_cli = null;
   }
 
-  let superpowers = null;
-  try {
-    const out = execSync("claude plugin list --json", { encoding: "utf8", timeout: 10000 });
-    const list = JSON.parse(out);
-    const found = Array.isArray(list) ? list.find((p) => p && p.name === "superpowers") : null;
-    superpowers = found && found.version ? found.version : null;
-  } catch {
-    superpowers = null;
-  }
+  const pluginEntries = probeInstalledPlugins();
+  if (ideas === null) ideas = findPluginVersion(pluginEntries, "ideas");
+  const superpowers = findPluginVersion(pluginEntries, "superpowers");
 
   return { ideas, superpowers, claude_cli };
 }
 
-function loadTierDResults() {
-  const results = readJSONIfExists(TIER_D_RESULTS_PATH);
+function loadTierDResults(root) {
+  const results = readJSONIfExists(tierDResultsPath(root));
   return Array.isArray(results) ? results : null;
+}
+
+// checkForDryRunContamination({scenarios, config}) -> void (throws DryRunContaminationError)
+//
+// Belt-and-braces safety net on top of the runs/ vs runs-dry/ root
+// segregation: real-mode report must never silently aggregate a dry-run
+// transcript that somehow ended up under the real runs/ tree (a stray
+// hand-copied fixture, a bug in an older build of this tool, etc). Scans
+// every transcript.json in scope of this report invocation (same
+// scenario/workflow/run traversal report itself uses) and throws the
+// moment it finds one marked dry_run:true. Always scans RUNS_ROOT
+// specifically -- this check only ever runs in real mode (see cmdReport),
+// and the reverse case (a real transcript found under runs-dry/) is never
+// checked here: harmless, and dry-run mode never calls this at all.
+function checkForDryRunContamination({ scenarios, config }) {
+  for (const scenario of scenarios) {
+    for (const workflow of WORKFLOWS) {
+      for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
+        const tPath = transcriptPath(RUNS_ROOT, scenario.id, workflow, runIndex);
+        const transcript = readJSONIfExists(tPath);
+        if (transcript && transcript.dry_run === true) {
+          throw new DryRunContaminationError(
+            `dry-run contamination: "${tPath}" is marked dry_run:true but lives under the real runs/ tree -- ` +
+              `refusing to aggregate it into a real report. Dry-run artifacts belong under runs-dry/ ` +
+              `(run "node run.js run --dry-run" writes there, not under runs/).`
+          );
+        }
+      }
+    }
+  }
 }
 
 async function cmdReport({ config, opts }) {
@@ -369,14 +545,15 @@ async function cmdReport({ config, opts }) {
     );
   }
 
+  const root = runsRootFor(opts.dryRun);
   const scenarios = selectScenarios(opts.scenario);
 
   const reportScenarios = scenarios.map((scenario) => {
     const runs = [];
     for (let runIndex = 1; runIndex <= config.runs_per_cell; runIndex++) {
-      const ideasMetrics = readJSONIfExists(metricsPath(scenario.id, "ideas", runIndex));
-      const brainstormingMetrics = readJSONIfExists(metricsPath(scenario.id, "brainstorming", runIndex));
-      const tierCFile = readJSONIfExists(tierCPath(scenario.id, runIndex));
+      const ideasMetrics = readJSONIfExists(metricsPath(root, scenario.id, "ideas", runIndex));
+      const brainstormingMetrics = readJSONIfExists(metricsPath(root, scenario.id, "brainstorming", runIndex));
+      const tierCFile = readJSONIfExists(tierCPath(root, scenario.id, runIndex));
       runs.push({
         ideas: { tierA: ideasMetrics ? ideasMetrics.tierA : null, tierB: ideasMetrics ? ideasMetrics.tierB : null },
         brainstorming: {
@@ -389,12 +566,20 @@ async function cmdReport({ config, opts }) {
     return { id: scenario.id, title: scenario.title, meta: scenario.meta, runs };
   });
 
-  const tierD = loadTierDResults();
+  // Real mode only -- dry-run mode never touches RUNS_ROOT at all, so there
+  // is nothing to check (see the doc comment on checkForDryRunContamination).
+  // Runs before any live CLI probe (getPinnedVersions) so a contamination
+  // hit fails fast without ever spawning the claude CLI.
+  if (!opts.dryRun) {
+    checkForDryRunContamination({ scenarios, config });
+  }
+
+  const tierD = loadTierDResults(root);
   const versions = getPinnedVersions({ dryRun: opts.dryRun });
 
   const markdown = buildReport({ scenarios: reportScenarios, tierD, config, versions });
-  fs.mkdirSync(RUNS_ROOT, { recursive: true });
-  const outPath = path.join(RUNS_ROOT, "report.md");
+  fs.mkdirSync(root, { recursive: true });
+  const outPath = path.join(root, "report.md");
   fs.writeFileSync(outPath, markdown);
   console.log(`[report] wrote ${outPath}`);
   const verdictLine = markdown.split("\n").find((l) => l.startsWith("**Verdict:"));
@@ -414,7 +599,7 @@ async function main(argv) {
   }
 
   const config = readConfig();
-  fs.mkdirSync(RUNS_ROOT, { recursive: true });
+  fs.mkdirSync(runsRootFor(opts.dryRun), { recursive: true });
 
   if (opts.command === "run") await cmdRun({ config, opts });
   else if (opts.command === "score") await cmdScore({ config, opts });
@@ -434,5 +619,12 @@ module.exports = {
   makeDryRunExec,
   extractFactIds,
   getPinnedVersions,
+  parsePluginListJSON,
+  parsePluginListText,
+  findPluginVersion,
+  DryRunContaminationError,
+  checkForDryRunContamination,
+  RUNS_ROOT,
+  RUNS_DRY_ROOT,
   main,
 };

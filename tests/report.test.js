@@ -334,6 +334,47 @@ test("buildReport does NOT label a run with >=15 scenarios PILOT", () => {
   assert.doesNotMatch(md, /\bPILOT\b/);
 });
 
+// =============================================================================
+// FIX 2 (shakedown bug): the header states scenarios WITH scored data, not
+// the size of the scenario corpus -- "1 of 6 scenario(s) scored", not "6
+// scenario(s) scored" when only 1 of the 6 corpus scenarios has any data
+// (tables correctly showed n=1, but the header claimed all 6 were scored).
+// PILOT labeling keys off the scored count, not the corpus count.
+// =============================================================================
+
+// unscoredScenario(id, meta) -> a scenario carrying the documented shape but
+// with every run's tierA/tierB/tierC null -- i.e. present in the corpus
+// (scenarios/ on disk) but never actually run/scored.
+function unscoredScenario(id, meta) {
+  return {
+    id,
+    title: `Scenario ${id}`,
+    meta,
+    runs: [{ ideas: { tierA: null, tierB: null }, brainstorming: { tierA: null, tierB: null }, tierC: null }],
+  };
+}
+
+test("buildReport's header states scenarios-with-data over corpus size ('1 of 6'), not corpus size alone", () => {
+  const winning = sixWinningScenarios();
+  const scenarios = [winning[0], ...winning.slice(1).map((s) => unscoredScenario(s.id, s.meta))];
+
+  const md = buildReport({ scenarios, tierD: null, config: CONFIG, versions: {} });
+  assert.match(md, /\b1 of 6 scenario\(s\) scored\b/, "header states scored-count of corpus-count, not corpus-count alone");
+});
+
+test("buildReport's PILOT label keys off the scored count, not the corpus count", () => {
+  // Corpus of 20 (>= PILOT_N_THRESHOLD), but only 1 scenario actually has
+  // scored data -- this must still read as a 1-scenario PILOT, not silently
+  // pass the N=15-20 bar on corpus size alone.
+  const winning = sixWinningScenarios();
+  const corpus = [winning[0]];
+  for (let i = 0; i < 19; i++) corpus.push(unscoredScenario(`unscored-${i}`, winning[0].meta));
+
+  const md = buildReport({ scenarios: corpus, tierD: null, config: CONFIG, versions: {} });
+  assert.match(md, /\bPILOT\b/, "1 scored scenario is still a PILOT even though the corpus has 20 entries");
+  assert.match(md, /\b1 of 20 scenario\(s\) scored\b/);
+});
+
 test("buildReport renders tier D as not-run when no tier D results are supplied", () => {
   const md = buildReport({ scenarios: sixWinningScenarios(), tierD: null, config: CONFIG, versions: {} });
   assert.match(md, /not run/i);

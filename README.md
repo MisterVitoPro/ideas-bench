@@ -8,6 +8,12 @@ By MisterVitoPro.
 This harness lives in its own repo so the [ideas plugin](https://github.com/MisterVitoPro/ideas)
 ships lean -- installers pull none of this tooling. `runs/` (all generated run
 output: transcripts, per-run metrics, `report.md`) is gitignored -- never commit it.
+`--dry-run` never touches `runs/`: it writes the identical tree shape under a
+separate `runs-dry/` root instead (also gitignored), end to end -- driver
+sandbox/transcript paths, score inputs/outputs, and report input+output. This
+keeps dry-run/test artifacts from ever contaminating a real `report` (a real
+`report` also refuses, with a named error, if it ever finds a transcript
+under `runs/` marked `dry_run:true`).
 
 ## Prerequisites
 
@@ -26,7 +32,9 @@ x each of the 2 workflows (`ideas`, `brainstorming`) x `config.runs_per_cell` (3
 **36 sessions** for a full pass at the current pilot scale. The design spec's target is
 N = 15-20 scenarios; shipping with 6 is a deliberate pilot (see Caveats below and the
 plan header's flagged constraints) -- `report.md` labels any run with fewer than 15
-scenarios **PILOT**, never silently presenting pilot numbers as the real thing.
+*scored* scenarios (scenarios with actual data, not just corpus size) **PILOT**, never
+silently presenting pilot numbers as the real thing. The header states both counts, e.g.
+"1 of 6 scenario(s) scored" when only 1 of the 6-scenario corpus has been run/scored.
 
 ## CLI
 
@@ -54,7 +62,9 @@ subcommands to one scenario and/or one workflow (`report` ignores `--workflow`, 
 `--dry-run` routes every subcommand through an in-process scripted executor instead of the
 real `claude` CLI: zero network calls, deterministic output, exit 0. Use it to validate the
 pipeline end to end (`run` -> `score` -> `report`)
-without spending a token or needing `ideas`/`superpowers` actually installed.
+without spending a token or needing `ideas`/`superpowers` actually installed. `--dry-run`
+also writes to a completely separate `runs-dry/` root instead of `runs/` (see above) --
+dry-run and real runs never share a directory tree.
 
 A typical full pass:
 
@@ -161,11 +171,17 @@ harness does not automate tier D.** It is a manual procedure:
 
 `report.md`'s "Pinned configuration" section records, best-effort, per the repo's honesty
 invariants (never fabricate; null when unavailable): the three model IDs from
-`config.json`, this repo's own `ideas` plugin version (read from `.claude-plugin/plugin.json`),
+`config.json`, this repo's own `ideas` plugin version (read from `.claude-plugin/plugin.json`
+when this checkout happens to sit next to one; falls back to the live probe below otherwise),
 and (skipped entirely in `--dry-run`, so dry-run never spawns the `claude` CLI itself for a
-version probe) the installed `claude` CLI version and `superpowers` plugin version via
-`claude plugin list --json` where that succeeds. Any field that cannot be determined is
-recorded as `null (unavailable)`, never guessed. Note this is narrower than "zero process
+version probe) the installed `claude` CLI version and both the `ideas` and `superpowers`
+plugin versions via `claude plugin list --json` (falling back to parsing the plain-text
+`claude plugin list` form if the JSON form is unavailable). Entries from `plugin list` are
+keyed as `"<name>@<marketplace>"` with no separate name field -- the short name is derived
+by splitting on the first `@`; a version of the literal string `"unknown"` (the CLI's own
+placeholder) is normalized to `null` rather than reported as if it were a real version. Any
+field that cannot be determined is recorded as `null (unavailable)`, never guessed. Note this
+is narrower than "zero process
 spawn" for `--dry-run` overall: `--dry-run` spawns no model calls and no `claude` CLI
 process at all, but `git init` still runs per sandbox workspace on every run (dry-run
 included, see `lib/driver.js`'s `tryGitInit`) -- best-effort, never a hard dependency.
@@ -197,8 +213,9 @@ These are the plan header's flagged constraints, carried forward into every gene
 report, not just this file:
 
 - **Pilot N.** Ships with 6 pilot scenarios, below the spec's target N=15-20; any report
-  built from fewer than 15 scenarios is labeled **PILOT**. Scaling the corpus is a
-  follow-up authoring task.
+  with fewer than 15 *scored* scenarios (scenarios with actual run data, not just corpus
+  size) is labeled **PILOT** -- the header states both counts, e.g. "1 of 6 scenario(s)
+  scored". Scaling the corpus is a follow-up authoring task.
 - **Prose-mode variant.** Headless runs cannot answer `AskUserQuestion`; the driver
   instructs both workflows, identically, to ask in numbered prose instead. Both sides run
   the same variant, but ideas' batching still shows up as fewer turns than a live

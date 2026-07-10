@@ -1,0 +1,36 @@
+Installed plugins:
+
+  ❯ code-atlas@mistervitopro-plugin-marketplace
+    Version: 2.1.0
+    Scope: user
+    Status: ✔ enabled
+
+  ❯ commit-commands@claude-plugins-official
+    Version: unknown
+    Scope: user
+    Status: ✔ enabled
+
+  ❯ ideas@mistervitopro-plugin-marketplace
+    Version: 0.2.1
+    Scope: user
+    Status: ✔ enabled
+
+  ❯ pixel-sprite-generator@game-dev-2d
+    Version: 0.3.0
+    Scope: project
+    Status: ✘ disabled
+
+  ❯ pixel-sprite-generator@game-dev-2d
+    Version: 0.3.0
+    Scope: local
+    Status: ✘ disabled
+
+  ❯ superpowers@claude-plugins-official
+    Version: 6.1.1
+    Scope: user
+    Status: ✔ enabled
+
+  ❯ typescript-lsp@claude-plugins-official
+    Version: 1.0.0
+    Scope: user
+    Status: ✘ disabled

@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
-  runSession,
+  runSession: runSessionRaw,
   buildSpawnPlan,
   quoteForCmd,
   buildAssistantInvocation,
@@ -20,7 +20,13 @@ const { buildSimUserPrompt } = require("../lib/simuser");
 const { createFakeExec } = require("../fixtures/fake-cli");
 
 const BENCH_ROOT = path.join(__dirname, "..");
-const RUNS_ROOT = path.join(BENCH_ROOT, "runs");
+// Tests must NEVER write into the real runs/ tree -- that tree can hold real
+// (non-dry) run data (see run.js's runs-dry/ segregation, added after a live
+// shakedown found this exact test file's cleanup hook deleting a real run's
+// data because it shared a root with test fixtures). Every runSession() call
+// below passes this as runsRoot explicitly.
+const RUNS_ROOT = path.join(BENCH_ROOT, "runs-dry", "driver-test");
+fs.mkdirSync(RUNS_ROOT, { recursive: true });
 
 const SCENARIO = {
   id: "test-scenario-driver",
@@ -52,6 +58,15 @@ const CONFIG = {
     brainstorming: { kickoff: "Use the superpowers:brainstorming skill to help me flesh out this idea: {idea}" },
   },
 };
+
+// runSession(args) -> Promise<transcript>
+//
+// Thin wrapper around lib/driver.js's runSession that always pins runsRoot
+// to this test file's dedicated runs-dry/driver-test root, so every call
+// site below (unchanged) writes there instead of the real runs/ tree.
+function runSession(args) {
+  return runSessionRaw({ runsRoot: RUNS_ROOT, ...args });
+}
 
 let runCounter = 0;
 function nextRunIndex() {

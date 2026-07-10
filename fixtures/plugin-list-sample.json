@@ -1,0 +1,84 @@
+[
+  {
+    "id": "code-atlas@mistervitopro-plugin-marketplace",
+    "version": "2.1.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\mistervitopro-plugin-marketplace\\code-atlas\\2.1.0",
+    "installedAt": "2026-05-02T18:31:10.245Z",
+    "lastUpdated": "2026-06-29T18:41:46.623Z"
+  },
+  {
+    "id": "commit-commands@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\claude-plugins-official\\commit-commands\\unknown",
+    "installedAt": "2026-03-08T07:55:57.585Z",
+    "lastUpdated": "2026-07-10T17:04:09.298Z"
+  },
+  {
+    "id": "ideas@mistervitopro-plugin-marketplace",
+    "version": "0.2.1",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\mistervitopro-plugin-marketplace\\ideas\\0.2.1",
+    "installedAt": "2026-07-10T16:28:45.168Z",
+    "lastUpdated": "2026-07-10T16:28:45.168Z"
+  },
+  {
+    "id": "pixel-sprite-generator@game-dev-2d",
+    "version": "0.3.0",
+    "scope": "project",
+    "enabled": false,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\game-dev-2d\\pixel-sprite-generator\\0.3.0",
+    "installedAt": "2026-06-30T07:39:42.454Z",
+    "lastUpdated": "2026-06-30T07:39:42.454Z",
+    "projectPath": "D:\\claude_projects\\werewolf_terror"
+  },
+  {
+    "id": "pixel-sprite-generator@game-dev-2d",
+    "version": "0.3.0",
+    "scope": "local",
+    "enabled": false,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\game-dev-2d\\pixel-sprite-generator\\0.3.0",
+    "installedAt": "2026-07-02T09:30:28.165Z",
+    "lastUpdated": "2026-07-02T09:30:28.165Z",
+    "projectPath": "D:\\minecraft\\mods\\dnd-weapons"
+  },
+  {
+    "id": "playwright@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\claude-plugins-official\\playwright\\unknown",
+    "installedAt": "2026-04-16T06:55:08.254Z",
+    "lastUpdated": "2026-07-10T17:04:09.291Z",
+    "mcpServers": {
+      "playwright": {
+        "command": "npx",
+        "args": [
+          "@playwright/mcp@latest"
+        ]
+      }
+    }
+  },
+  {
+    "id": "superpowers@claude-plugins-official",
+    "version": "6.1.1",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\claude-plugins-official\\superpowers\\6.1.1",
+    "installedAt": "2026-02-24T21:39:23.302Z",
+    "lastUpdated": "2026-07-03T02:38:03.534Z"
+  },
+  {
+    "id": "typescript-lsp@claude-plugins-official",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "C:\\Users\\Antho\\.claude\\plugins\\cache\\claude-plugins-official\\typescript-lsp\\1.0.0",
+    "installedAt": "2026-03-08T07:55:57.585Z",
+    "lastUpdated": "2026-03-08T07:55:57.585Z"
+  }
+]
