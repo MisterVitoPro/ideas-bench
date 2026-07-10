@@ -112,6 +112,31 @@ in code comments and in `report.md`:
   informational row in `report.md`'s Tier A table -- never fed into the primary comparison
   or the success bar.
 
+## Sandbox permission mode and retry
+
+- **Permission mode.** Every assistant/interviewee invocation (`lib/driver.js`'s
+  `buildAssistantInvocation`, both the kickoff and every `--resume`d turn) carries
+  `--permission-mode <mode>`, defaulting to `acceptEdits` via `config.assistant_permission_mode`.
+  A headless `claude -p` session otherwise cannot write files at all, which means the
+  interviewee can never write its ledger or spec into the sandbox workspace and
+  spec-detection (`findSpecFile`) never fires -- the session just idles to `turn_cap`
+  instead of ending `spec-detected`. `acceptEdits` is reasonable here specifically because
+  the target is the disposable, per-run sandbox workspace (`ensureSandbox`), not the
+  repo or the host filesystem -- the harness preamble also tells the model to work only
+  inside that directory. If a future run needs a different mode (e.g. `bypassPermissions`),
+  set `assistant_permission_mode` in `config.json` -- it's a config edit, not a code
+  change. The sim-user invocation (`buildSimUserInvocation`) never gets this flag: it's a
+  stateless, text-only call that has no need to write anything.
+- **Retry-once on CLI failure.** If a single assistant or sim-user executor call fails
+  (non-zero exit, or the executor throws), `runSession` retries that exact same call once
+  before giving up. This rides through a transient CLI failure (e.g. a bare exit 1 with
+  empty stderr) without discarding an otherwise-healthy session. The retry is recorded
+  honestly on the transcript: `transcript.retries` is a total count of retries actually
+  attempted this session (`0` when nothing failed, never fabricated). If the retry also
+  fails, the existing error path stands unchanged -- `ended_by` becomes `"error"`,
+  `transcript.error` records the message, and `transcript.json` is still written with
+  whatever turns completed before the failure.
+
 ## Tier D — downstream outcome (not automated)
 
 Spec section 13 names tier D ("the same fixed executor implements from each spec with no

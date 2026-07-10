@@ -2,8 +2,9 @@
   "interviewee_model": "claude-sonnet-5",
   "simuser_model": "claude-sonnet-5",
   "judge_model": "claude-opus-4-8",
-  "runs_per_cell": 3,
+  "runs_per_cell": 1,
   "turn_cap": 25,
+  "assistant_permission_mode": "acceptEdits",
   "workflows": {
     "ideas": {
       "kickoff": "/ideas:interview {idea}"

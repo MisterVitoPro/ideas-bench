@@ -46,6 +46,7 @@ const CONFIG = {
   judge_model: "claude-opus-4-8",
   runs_per_cell: 3,
   turn_cap: 25,
+  assistant_permission_mode: "acceptEdits",
   workflows: {
     ideas: { kickoff: "/ideas:interview {idea}" },
     brainstorming: { kickoff: "Use the superpowers:brainstorming skill to help me flesh out this idea: {idea}" },
@@ -149,21 +150,31 @@ test("the user reply text is exactly what the sim-user model (via exec) returned
 
   // The sim-user call must be distinguishable as going through the same
   // executor and must be pinned to config.simuser_model, with its prompt on
-  // stdin grounded in the scenario's hidden doc.
+  // stdin grounded in the scenario's hidden doc. It must NEVER carry
+  // --permission-mode -- it's a stateless, text-only call with no need to
+  // write files.
   const simUserCall = exec.calls[1];
   assert.ok(simUserCall.args.includes("--model"));
   assert.strictEqual(simUserCall.args[simUserCall.args.indexOf("--model") + 1], CONFIG.simuser_model);
   assert.ok(simUserCall.stdin.includes(SCENARIO.hiddenDoc.trim()), "sim-user prompt travels via stdin");
+  assert.ok(!simUserCall.args.includes("--permission-mode"), "sim-user call never gets write access");
 
   // The first (kickoff) call must NOT resume a session, and every assistant
   // call must pin config.interviewee_model -- otherwise the ambient CLI
-  // default model would silently decide the benchmark.
+  // default model would silently decide the benchmark. It must also carry
+  // --permission-mode acceptEdits so the interviewee can write its
+  // ledger/spec files inside the sandbox workspace.
   const kickoffCall = exec.calls[0];
   assert.ok(!kickoffCall.args.includes("--resume"));
   assert.strictEqual(kickoffCall.args[kickoffCall.args.indexOf("--model") + 1], CONFIG.interviewee_model);
+  assert.ok(kickoffCall.args.includes("--permission-mode"));
+  assert.strictEqual(
+    kickoffCall.args[kickoffCall.args.indexOf("--permission-mode") + 1],
+    CONFIG.assistant_permission_mode
+  );
 
-  // The second assistant call must resume the session returned by the first
-  // and stay pinned to the interviewee model.
+  // The second assistant call must resume the session returned by the first,
+  // stay pinned to the interviewee model, and also carry --permission-mode.
   const secondAssistantCall = exec.calls[2];
   assert.ok(secondAssistantCall.args.includes("--resume"));
   assert.strictEqual(secondAssistantCall.args[secondAssistantCall.args.indexOf("--resume") + 1], "fake-session-1");
@@ -171,6 +182,29 @@ test("the user reply text is exactly what the sim-user model (via exec) returned
     secondAssistantCall.args[secondAssistantCall.args.indexOf("--model") + 1],
     CONFIG.interviewee_model
   );
+  assert.ok(secondAssistantCall.args.includes("--permission-mode"));
+  assert.strictEqual(
+    secondAssistantCall.args[secondAssistantCall.args.indexOf("--permission-mode") + 1],
+    CONFIG.assistant_permission_mode
+  );
+});
+
+test("runSession reads config.assistant_permission_mode as an override -- a non-default value reaches the assistant CLI args", async () => {
+  const runIndex = nextRunIndex();
+  const exec = createFakeExec([
+    { text: "Final spec ready, please approve.", usage: { output_tokens: 10 }, writeSpec: "docs/specs/final.md" },
+  ]);
+
+  await runSession({
+    scenario: SCENARIO,
+    workflow: "ideas",
+    runIndex,
+    config: { ...CONFIG, assistant_permission_mode: "bypassPermissions" },
+    exec,
+  });
+
+  const kickoffCall = exec.calls[0];
+  assert.strictEqual(kickoffCall.args[kickoffCall.args.indexOf("--permission-mode") + 1], "bypassPermissions");
 });
 
 // --- EARS 3: missing usage never fabricated ---------------------------------
@@ -261,6 +295,7 @@ test("an executor error ends the session with ended_by 'error' and still writes 
     { text: "1. What should the flag be named?", usage: { output_tokens: 20 } },
     { text: "Call it --since.", usage: { output_tokens: 8 } },
     { error: "claude CLI exited with code 1: simulated failure" },
+    { error: "claude CLI exited with code 1: simulated failure (retry)" },
   ]);
 
   const transcript = await runSession({ scenario: SCENARIO, workflow: "ideas", runIndex, config: CONFIG, exec });
@@ -273,6 +308,72 @@ test("an executor error ends the session with ended_by 'error' and still writes 
   const onDisk = JSON.parse(fs.readFileSync(transcriptPath, "utf8"));
   assert.strictEqual(onDisk.ended_by, "error");
   assert.strictEqual(onDisk.turns.length, 2);
+});
+
+// --- retry-once on CLI failure -----------------------------------------------
+
+test("a failing executor call is retried once and the session completes normally when the retry succeeds", async () => {
+  const runIndex = nextRunIndex();
+  const exec = createFakeExec([
+    { error: "claude CLI exited with code 1: transient failure" }, // kickoff fails...
+    { text: "Here is the final spec, please approve.", usage: { output_tokens: 30 }, writeSpec: "docs/specs/final.md" }, // ...retry succeeds
+  ]);
+
+  const transcript = await runSession({ scenario: SCENARIO, workflow: "ideas", runIndex, config: CONFIG, exec });
+
+  assert.strictEqual(transcript.ended_by, "spec-detected");
+  assert.strictEqual(transcript.retries, 1, "the single retry is recorded honestly");
+  assert.strictEqual(transcript.turns.length, 1, "only the successful (retried) call produced a turn");
+  assert.strictEqual(exec.calls.length, 2, "the executor was called twice: the failed attempt plus the retry");
+
+  const onDisk = JSON.parse(
+    fs.readFileSync(path.join(runDirFor("ideas", runIndex), "transcript.json"), "utf8")
+  );
+  assert.strictEqual(onDisk.retries, 1);
+});
+
+test("a call that fails twice in a row (initial + retry) still ends the session with ended_by 'error' and retries=1", async () => {
+  const runIndex = nextRunIndex();
+  const exec = createFakeExec([
+    { error: "claude CLI exited with code 1: first failure" },
+    { error: "claude CLI exited with code 1: retry also failed" },
+  ]);
+
+  const transcript = await runSession({ scenario: SCENARIO, workflow: "ideas", runIndex, config: CONFIG, exec });
+
+  assert.strictEqual(transcript.ended_by, "error");
+  assert.strictEqual(transcript.retries, 1, "exactly one retry is attempted, never more");
+  assert.strictEqual(transcript.turns.length, 0);
+  assert.strictEqual(exec.calls.length, 2);
+
+  const transcriptPath = path.join(runDirFor("ideas", runIndex), "transcript.json");
+  assert.ok(fs.existsSync(transcriptPath), "transcript.json is still written after a doubly-failed call");
+  const onDisk = JSON.parse(fs.readFileSync(transcriptPath, "utf8"));
+  assert.strictEqual(onDisk.ended_by, "error");
+  assert.strictEqual(onDisk.retries, 1);
+});
+
+test("a retry mid-session (sim-user call fails once) is also recorded in retries, and does not disturb prior turns", async () => {
+  const runIndex = nextRunIndex();
+  const exec = createFakeExec([
+    { text: "1. What should the flag be named?", usage: { output_tokens: 20 } },
+    { error: "claude CLI exited with code 1: sim-user transient failure" },
+    { text: "Call it --since.", usage: { output_tokens: 8 } },
+    {
+      text: "Here is the final spec, please approve.",
+      usage: { output_tokens: 30 },
+      writeSpec: "docs/specs/final.md",
+    },
+  ]);
+
+  const transcript = await runSession({ scenario: SCENARIO, workflow: "ideas", runIndex, config: CONFIG, exec });
+
+  assert.strictEqual(transcript.ended_by, "spec-detected");
+  assert.strictEqual(transcript.retries, 1);
+  assert.deepStrictEqual(
+    transcript.turns.map((t) => t.role),
+    ["assistant", "user", "assistant"]
+  );
 });
 
 // --- transcript.json written to the documented path/shape ------------------
@@ -304,6 +405,8 @@ test("transcript.json is written to runs/<scenario>/<workflow>/run<N>/transcript
     assert.strictEqual(typeof shape.totals.questions_asked, "number");
     assert.ok("spec_path" in shape.artifact);
     assert.ok(["spec-detected", "turn-cap", "error"].includes(shape.ended_by));
+    assert.strictEqual(typeof shape.retries, "number");
+    assert.strictEqual(shape.retries, 0, "no failure occurred in this run, so no retry was attempted");
   }
 });
 
@@ -334,18 +437,26 @@ test("buildSimUserPrompt on an empty transcript still produces a valid grounded 
 
 // --- pure helper unit tests --------------------------------------------------
 
-test("buildAssistantInvocation: no session -> kickoff form, prompt on stdin (never argv), model pinned", () => {
+test("buildAssistantInvocation: no session -> kickoff form, prompt on stdin (never argv), model pinned, permission-mode defaults to acceptEdits", () => {
   const { args, stdin } = buildAssistantInvocation({
     prompt: 'multi word prompt with "quotes" & pipes | inside',
     sessionId: null,
     model: "claude-sonnet-5",
   });
-  assert.deepStrictEqual(args, ["-p", "--output-format", "json", "--model", "claude-sonnet-5"]);
+  assert.deepStrictEqual(args, [
+    "-p",
+    "--output-format",
+    "json",
+    "--model",
+    "claude-sonnet-5",
+    "--permission-mode",
+    "acceptEdits",
+  ]);
   assert.strictEqual(stdin, 'multi word prompt with "quotes" & pipes | inside');
   assert.ok(!args.some((a) => a.includes("multi word")), "prompt text never appears in argv");
 });
 
-test("buildAssistantInvocation: with session -> --resume form, prompt on stdin, model pinned", () => {
+test("buildAssistantInvocation: with session -> --resume form, prompt on stdin, model pinned, permission-mode defaults to acceptEdits", () => {
   const { args, stdin } = buildAssistantInvocation({
     prompt: "hello again",
     sessionId: "sess-42",
@@ -359,8 +470,28 @@ test("buildAssistantInvocation: with session -> --resume form, prompt on stdin, 
     "json",
     "--model",
     "claude-sonnet-5",
+    "--permission-mode",
+    "acceptEdits",
   ]);
   assert.strictEqual(stdin, "hello again");
+});
+
+test("buildAssistantInvocation: an explicit permissionMode overrides the acceptEdits default, on both invocation forms", () => {
+  const kickoff = buildAssistantInvocation({
+    prompt: "hi",
+    sessionId: null,
+    model: "claude-sonnet-5",
+    permissionMode: "bypassPermissions",
+  });
+  assert.deepStrictEqual(kickoff.args.slice(-2), ["--permission-mode", "bypassPermissions"]);
+
+  const resumed = buildAssistantInvocation({
+    prompt: "hi again",
+    sessionId: "sess-1",
+    model: "claude-sonnet-5",
+    permissionMode: "bypassPermissions",
+  });
+  assert.deepStrictEqual(resumed.args.slice(-2), ["--permission-mode", "bypassPermissions"]);
 });
 
 test("buildSimUserInvocation pins --model and carries the prompt on stdin", () => {
