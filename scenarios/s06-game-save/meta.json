@@ -1,0 +1,27 @@
+{
+  "id": "s06-game-save",
+  "title": "Add cross-device cloud save to a mobile roguelike",
+  "domain": "game feature",
+  "facts": [
+    { "id": "f1", "text": "Game is a Unity 2D roguelike currently using local-only PlayerPrefs/JSON saves.", "weight": "critical" },
+    { "id": "f2", "text": "Cloud save must be built on PlayFab, which is already integrated for leaderboards.", "weight": "critical" },
+    { "id": "f3", "text": "Must support 3 named save slots per player.", "weight": "critical" },
+    { "id": "f4", "text": "Saves must work offline and sync automatically when connectivity returns.", "weight": "critical" },
+    { "id": "f5", "text": "Would like a manual 'sync now' button in the pause menu.", "weight": "nice" },
+    { "id": "f6", "text": "Conflicting offline saves to the same slot on two devices must be resolved without silently losing progress.", "weight": "critical" },
+    { "id": "f7", "text": "Would like a 'last synced' timestamp shown in the save-slot UI.", "weight": "nice" },
+    { "id": "f8", "text": "Would like each save file kept under 50KB.", "weight": "nice" },
+    { "id": "f9", "text": "Existing local saves must be migrated to the cloud system on first launch post-update with zero data loss.", "weight": "critical" },
+    { "id": "f10", "text": "Would like the save file to be human-readable JSON.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "Which device wins by default when a save conflict is detected -- most recent timestamp, most progress, or always ask the player.",
+    "Whether save slots can be renamed by the player or are fixed labels.",
+    "Whether cloud save requires a PlayFab account/login or works anonymously tied to a device ID.",
+    "The offline duration threshold before a sync conflict is even flagged versus silently overwritten."
+  ],
+  "latent": [
+    "The minimum supported OS versions (iOS 13 / Android 8) require pinning to a specific PlayFab offline SDK version due to known cache issues.",
+    "There is an App Store featured-placement submission deadline in 3 weeks, so migration risk needs a rollback plan that does not require a forced app update."
+  ]
+}

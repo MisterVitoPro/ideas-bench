@@ -1,0 +1,27 @@
+{
+  "id": "s05-data-pipeline",
+  "title": "Ingest regional warehouse sales CSVs into Snowflake",
+  "domain": "data pipeline",
+  "facts": [
+    { "id": "f1", "text": "Pipeline runs nightly via a new Airflow DAG alongside existing DAGs.", "weight": "critical" },
+    { "id": "f2", "text": "Three regional warehouses each drop a CSV into their own S3 path by 2am UTC.", "weight": "critical" },
+    { "id": "f3", "text": "Destination is the analytics.daily_sales table in Snowflake.", "weight": "critical" },
+    { "id": "f4", "text": "Source CSVs use differing column names for the same field (SKU / sku_id / item_code) that must be reconciled.", "weight": "critical" },
+    { "id": "f5", "text": "Would like a Slack alert if a warehouse file is missing by 4am UTC.", "weight": "nice" },
+    { "id": "f6", "text": "The load must be idempotent -- re-running for an already-loaded day must not duplicate rows.", "weight": "critical" },
+    { "id": "f7", "text": "Would like basic data-quality checks (e.g. no negative quantities) before loading.", "weight": "nice" },
+    { "id": "f8", "text": "Would like the ability to backfill the last 90 days of history on demand.", "weight": "nice" },
+    { "id": "f9", "text": "Currency values must be converted to USD using that day's exchange rate.", "weight": "critical" },
+    { "id": "f10", "text": "Would like a daily row-count metric emitted for a monitoring dashboard.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "Where the daily exchange rates come from.",
+    "What to do with rows that fail data-quality checks -- drop, quarantine, or fail the whole run.",
+    "Whether the SKU-name reconciliation needs a hand-maintained mapping table or can be inferred automatically.",
+    "The retention policy for raw CSV files after a successful load."
+  ],
+  "latent": [
+    "The EU warehouse's raw export contains a customer-name column subject to GDPR that must be dropped or anonymized before leaving EU-region infrastructure.",
+    "Finance runs a manual monthly reconciliation process against daily_sales, and changing the table's grain would silently break their existing report."
+  ]
+}

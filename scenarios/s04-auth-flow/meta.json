@@ -1,0 +1,27 @@
+{
+  "id": "s04-auth-flow",
+  "title": "Add passwordless magic-link login",
+  "domain": "auth flow",
+  "facts": [
+    { "id": "f1", "text": "Existing auth is email+password via Express + Passport.js with Redis-backed sessions.", "weight": "critical" },
+    { "id": "f2", "text": "New feature is passwordless magic-link login by email.", "weight": "critical" },
+    { "id": "f3", "text": "Magic link tokens expire after 15 minutes.", "weight": "critical" },
+    { "id": "f4", "text": "Magic link tokens are single-use once redeemed.", "weight": "critical" },
+    { "id": "f5", "text": "Would like rate limiting on repeated magic-link requests for the same email.", "weight": "nice" },
+    { "id": "f6", "text": "Existing password-based login must continue to work unchanged.", "weight": "critical" },
+    { "id": "f7", "text": "Would like to reuse the existing transactional email template system.", "weight": "nice" },
+    { "id": "f8", "text": "Would like a 'remember this device' option for 30 days after magic-link login.", "weight": "nice" },
+    { "id": "f9", "text": "Tokens must be cryptographically random to prevent enumeration/guessing.", "weight": "critical" },
+    { "id": "f10", "text": "Would like a friendly 'check your email' screen while the user waits.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "Whether a magic link can auto-create a new account for an unrecognized email or only works for existing accounts.",
+    "Whether a magic-link session carries the same permissions/roles as a password-login session or a reduced-trust session.",
+    "What happens when a user clicks an expired link -- silent failure vs. offering to resend.",
+    "Whether magic-link login is opt-in per user or force-enabled for everyone."
+  ],
+  "latent": [
+    "SOC 2 requires every authentication event, including magic-link issuance and redemption, written to an immutable audit log table.",
+    "Mobile deep-linking already uses a specific URL scheme prefix that the magic-link URL must not collide with."
+  ]
+}

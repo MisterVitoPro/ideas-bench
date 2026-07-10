@@ -1,0 +1,27 @@
+{
+  "id": "s02-schema-migration",
+  "title": "Enforce case-insensitive unique emails on the users table",
+  "domain": "schema migration",
+  "facts": [
+    { "id": "f1", "text": "Database is PostgreSQL 15, migrations managed with node-pg-migrate.", "weight": "critical" },
+    { "id": "f2", "text": "users.email is currently TEXT with no uniqueness constraint, ~120k rows, some case-variant duplicates.", "weight": "critical" },
+    { "id": "f3", "text": "Email uniqueness must be enforced case-insensitively going forward.", "weight": "critical" },
+    { "id": "f4", "text": "The migration must not cause downtime; the app runs 24/7.", "weight": "critical" },
+    { "id": "f5", "text": "Would like a generated, indexed email_normalized (lower-cased) column.", "weight": "nice" },
+    { "id": "f6", "text": "Application code should also lower-case emails at signup going forward.", "weight": "nice" },
+    { "id": "f7", "text": "Existing case-variant duplicate rows must be auto-resolved, keeping the oldest account.", "weight": "critical" },
+    { "id": "f8", "text": "The migration should be reversible (a working down migration).", "weight": "nice" },
+    { "id": "f9", "text": "Staging must be migrated and verified before production.", "weight": "critical" },
+    { "id": "f10", "text": "Would like a report/log of which duplicate rows were merged, for support follow-up.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "What happens to the account that 'loses' (its email freed) when duplicates are merged -- deleted, deactivated, or renamed.",
+    "Whether the uniqueness constraint should be enforced at the database level or only at the application level.",
+    "Whether the normalized column should be a generated column, a trigger, or maintained by application code.",
+    "The timeline for when this needs to ship."
+  ],
+  "latent": [
+    "A nightly export job reads the users table with SELECT * by column position, so column order cannot change.",
+    "Compliance requires an audit log entry for every email change made during the duplicate-merge process."
+  ]
+}

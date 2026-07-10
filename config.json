@@ -1,0 +1,15 @@
+{
+  "interviewee_model": "claude-sonnet-5",
+  "simuser_model": "claude-sonnet-5",
+  "judge_model": "claude-opus-4-8",
+  "runs_per_cell": 3,
+  "turn_cap": 25,
+  "workflows": {
+    "ideas": {
+      "kickoff": "/ideas:interview {idea}"
+    },
+    "brainstorming": {
+      "kickoff": "Use the superpowers:brainstorming skill to help me flesh out this idea: {idea}"
+    }
+  }
+}

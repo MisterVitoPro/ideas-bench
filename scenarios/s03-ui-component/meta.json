@@ -1,0 +1,27 @@
+{
+  "id": "s03-ui-component",
+  "title": "Add a Toast notification component to the design system",
+  "domain": "UI component",
+  "facts": [
+    { "id": "f1", "text": "Frontend is React 18 + TypeScript + Tailwind, shared UI lives in the @planboard/ui package.", "weight": "critical" },
+    { "id": "f2", "text": "Component name is Toast, importable from @planboard/ui.", "weight": "critical" },
+    { "id": "f3", "text": "Must support 4 variants: success, error, warning, info, each with its own icon and color.", "weight": "critical" },
+    { "id": "f4", "text": "Toasts auto-dismiss after 5 seconds by default, overridable per toast.", "weight": "critical" },
+    { "id": "f5", "text": "Would like an optional action button (e.g. Undo).", "weight": "nice" },
+    { "id": "f6", "text": "Multiple toasts should stack vertically, newest on top.", "weight": "nice" },
+    { "id": "f7", "text": "Must be accessible -- new toasts announced to screen readers via aria-live.", "weight": "critical" },
+    { "id": "f8", "text": "Would like a manual close (x) button.", "weight": "nice" },
+    { "id": "f9", "text": "Variant colors must match the existing design tokens in tailwind.config.js.", "weight": "critical" },
+    { "id": "f10", "text": "Would like a Storybook story added for each variant.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "Which screen corner toasts should appear in.",
+    "Whether toasts should be dismissible by swipe on mobile.",
+    "The maximum number of simultaneously visible toasts.",
+    "Whether toasts persist across route/page navigation."
+  ],
+  "latent": [
+    "@planboard/ui is consumed by two other internal apps that do not pin exact versions, so a breaking prop-API change would silently break their builds.",
+    "The dashboard, including Toast, must remain fully functional with animations disabled for customers running prefers-reduced-motion."
+  ]
+}

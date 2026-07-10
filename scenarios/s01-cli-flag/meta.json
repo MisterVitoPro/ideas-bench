@@ -1,0 +1,27 @@
+{
+  "id": "s01-cli-flag",
+  "title": "Add a --since flag to the chlog CLI",
+  "domain": "CLI feature",
+  "facts": [
+    { "id": "f1", "text": "chlog is a Node.js CLI tool already published to npm.", "weight": "critical" },
+    { "id": "f2", "text": "The new flag must be named --since and accept a date like 2026-01-01.", "weight": "critical" },
+    { "id": "f3", "text": "Default behavior (no flags) must remain exactly last-tag-to-HEAD.", "weight": "critical" },
+    { "id": "f4", "text": "Output must remain valid Markdown matching the existing CHANGELOG.md format.", "weight": "critical" },
+    { "id": "f5", "text": "A short -s alias for --since would be nice to have.", "weight": "nice" },
+    { "id": "f6", "text": "The date parser should also accept full ISO 8601 timestamps, not just plain dates.", "weight": "nice" },
+    { "id": "f7", "text": "An invalid date should produce an error listing the accepted formats.", "weight": "nice" },
+    { "id": "f8", "text": "The feature must run identically on Windows and Linux CI runners.", "weight": "critical" },
+    { "id": "f9", "text": "A one-line summary of the matched commit count should be printed.", "weight": "nice" },
+    { "id": "f10", "text": "Commits from bot accounts (username ending in [bot]) must be excluded.", "weight": "critical" }
+  ],
+  "ambiguities": [
+    "Whether --since implies a paired --until flag or only an open-ended range to HEAD.",
+    "Whether relative date values like '7d' are in scope for this release or only absolute dates.",
+    "What happens when a future date is passed: error out or silently return zero commits.",
+    "Whether merge commits should be included or excluded from the --since output."
+  ],
+  "latent": [
+    "The tool must make no network calls at all -- the CI runners that execute chlog are air-gapped.",
+    "The flag must ship in Friday's release, which is at most a minor version bump, so nothing may break for existing callers."
+  ]
+}
