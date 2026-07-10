@@ -164,15 +164,50 @@ function summaryOf(a, b) {
   return summarize(a, b);
 }
 
-test("evaluateSuccessBar PASSes when tokens drop >=30%, tier C composite matches-or-beats, and no tier D is present", () => {
+test("evaluateSuccessBar PASSes when tokens drop >=30%, tier C matches-or-beats, burden is lower, and no tier D is present", () => {
   const tokenSummary = summaryOf([300, 300, 300], [600, 600, 600]); // 50% fewer
   const tierCSummary = summaryOf([4.5, 4.5, 4.5], [2.5, 2.5, 2.5]); // ideas beats
-  const userBurdenSummary = summaryOf([60, 60, 60], [90, 90, 90]);
+  const userBurdenSummary = summaryOf([60, 60, 60], [90, 90, 90]); // ideas' burden strictly lower
 
   const result = evaluateSuccessBar({ tokenSummary, tierCCompositeSummary: tierCSummary, userBurdenSummary, tierDSummary: null });
   assert.strictEqual(result.verdict, "PASS");
   assert.ok(result.tokenReductionPct >= 0.3);
+  assert.strictEqual(result.userBurdenPass, true);
   assert.strictEqual(result.tierDPass, null, "tier D was not supplied -- not run, not blocking");
+});
+
+// Spec section 13's bar has FOUR conditions -- tier D pass rate, tier C
+// composite, >=30% fewer output tokens, AND "imposing lower user burden".
+// User burden gates the verdict like the other three.
+
+test("evaluateSuccessBar FAILs when ideas' user burden is higher, even with tokens and tier C passing", () => {
+  const tokenSummary = summaryOf([300, 300, 300], [600, 600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5, 4.5], [2.5, 2.5, 2.5]);
+  const userBurdenSummary = summaryOf([120, 120, 120], [90, 90, 90]); // ideas' burden HIGHER
+
+  const result = evaluateSuccessBar({ tokenSummary, tierCCompositeSummary: tierCSummary, userBurdenSummary, tierDSummary: null });
+  assert.strictEqual(result.verdict, "FAIL");
+  assert.strictEqual(result.userBurdenPass, false);
+});
+
+test("evaluateSuccessBar does not PASS on exactly equal user burden -- the spec says lower, not lower-or-equal", () => {
+  const tokenSummary = summaryOf([300, 300, 300], [600, 600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5, 4.5], [2.5, 2.5, 2.5]);
+  const userBurdenSummary = summaryOf([90, 90, 90], [90, 90, 90]); // exactly equal
+
+  const result = evaluateSuccessBar({ tokenSummary, tierCCompositeSummary: tierCSummary, userBurdenSummary, tierDSummary: null });
+  assert.notStrictEqual(result.verdict, "PASS");
+  assert.strictEqual(result.verdict, "FAIL");
+  assert.strictEqual(result.userBurdenPass, false);
+});
+
+test("evaluateSuccessBar reports INSUFFICIENT-DATA when the user-burden metric family is entirely null", () => {
+  const tokenSummary = summaryOf([300, 300], [600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5], [2.5, 2.5]);
+  const userBurdenSummary = summaryOf([null, null], [null, null]); // n=0
+
+  const result = evaluateSuccessBar({ tokenSummary, tierCCompositeSummary: tierCSummary, userBurdenSummary, tierDSummary: null });
+  assert.strictEqual(result.verdict, "INSUFFICIENT-DATA");
 });
 
 test("evaluateSuccessBar FAILs when the token reduction is under 30% even if tier C wins", () => {

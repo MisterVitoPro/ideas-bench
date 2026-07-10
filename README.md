@@ -134,14 +134,14 @@ Quoted verbatim from `docs/specs/2026-07-08-ideas-design.md` section 13:
 > burden. If it misses, the spec's claims are revised — never the numbers. (The
 > plan-runner honesty invariants apply to our own benchmark first.)
 
-`report.md` evaluates this as **PASS** / **FAIL** / **INSUFFICIENT-DATA**: >=30% fewer
-output tokens per spec AND a tier C composite that matches or beats brainstorming AND
-(when a `tier-d-results.json` is present) a tier D pass rate that matches or beats
-brainstorming. User burden is reported alongside as the full spec paragraph also names it,
-but a missing-data gap in that one metric alone cannot turn an otherwise-decided bar into
-a false FAIL. **WHEN the output-tokens family or the tier C composite family is entirely
-null** (every scenario's paired value missing), the verdict is **INSUFFICIENT-DATA** --
-never a silently-favorable PASS or FAIL built on no data.
+`report.md` evaluates this as **PASS** / **FAIL** / **INSUFFICIENT-DATA** on all four
+pre-declared conditions: >=30% fewer output tokens per spec AND a tier C composite that
+matches or beats brainstorming AND strictly lower simulated-user burden ("imposing lower
+user burden" -- lower, not lower-or-equal, so an exact tie does not pass) AND (when a
+`tier-d-results.json` is present) a tier D pass rate that matches or beats brainstorming.
+**WHEN the output-tokens family, the tier C composite family, or the user-burden family
+is entirely null** (every scenario's paired value missing), the verdict is
+**INSUFFICIENT-DATA** -- never a silently-favorable PASS or FAIL built on no data.
 
 ## Caveats (also in every `report.md`)
 
