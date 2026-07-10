@@ -1,0 +1,47 @@
+{
+  "scenario": "fx-netfetch-timeout",
+  "workflow": "ideas",
+  "run": 1,
+  "turns": [
+    {
+      "role": "assistant",
+      "text": "Happy to help spec this out. A few questions:\n1. What should netfetch's timeout flag be called, and what unit should the value be in?\n2. What should happen to the existing default behavior if --timeout isn't passed?\n3. What exit code should a timed-out download use?\n4. Any constraints on adding new dependencies for the implementation?",
+      "usage": { "output_tokens": 96 }
+    },
+    {
+      "role": "user",
+      "text": "Call it --timeout, whole seconds. Keep the default at 30 seconds if it's not passed. Use exit code 124, same as the Unix timeout command -- our CI already keys retries off that. And no new npm dependencies at all, netfetch has to stay dependency-free.",
+      "usage": { "output_tokens": 58 }
+    },
+    {
+      "role": "assistant",
+      "text": "Got it. A couple more:\n1. What is netfetch actually used for, so I get the framing right in the spec?\n2. Should there be a short alias like -t for --timeout?\n3. If a timeout does fire, what should the error message include?",
+      "usage": { "output_tokens": 61 }
+    },
+    {
+      "role": "user",
+      "text": "netfetch is our internal Node CLI for downloading build artifacts. A -t alias would be nice to have, not required. And yeah, if it times out the error should say which URL timed out -- that's saved me a lot of debugging time elsewhere. Oh, and a --retries flag to auto-retry would also be nice someday, though that's not needed for this release.",
+      "usage": { "output_tokens": 79 }
+    },
+    {
+      "role": "assistant",
+      "text": "Here's the spec, written to docs/specs/timeout-flag.md. It covers: --timeout flag in whole seconds, default 30s preserved, exit code 124 on timeout, -t alias as a stretch goal, --retries as a stretch goal, error messages naming the timed-out URL, and zero new dependencies. Let me know if that looks right.",
+      "usage": { "output_tokens": 74 }
+    },
+    {
+      "role": "user",
+      "text": "looks good, approve",
+      "usage": { "output_tokens": 6 }
+    }
+  ],
+  "totals": {
+    "output_tokens": 374,
+    "output_tokens_complete": true,
+    "turns": 6,
+    "questions_asked": 7
+  },
+  "artifact": {
+    "spec_path": "docs/specs/timeout-flag.md"
+  },
+  "ended_by": "spec-detected"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "fx-netfetch-timeout",
+  "title": "Add a --timeout flag to the netfetch CLI",
+  "domain": "CLI feature",
+  "facts": [
+    { "id": "f1", "text": "netfetch is an internal Node.js CLI used to download build artifacts.", "weight": "critical" },
+    { "id": "f2", "text": "The new flag must be named --timeout and accept a value in whole seconds.", "weight": "critical" },
+    { "id": "f3", "text": "The default timeout when the flag is omitted must remain 30 seconds, unchanged.", "weight": "critical" },
+    { "id": "f4", "text": "On timeout, the process must exit with code 124, matching the Unix `timeout` command convention.", "weight": "critical" },
+    { "id": "f5", "text": "A companion --retries flag would be nice to have but is not required this release.", "weight": "nice" },
+    { "id": "f6", "text": "Timeout values over 3600 seconds should log a warning rather than fail outright.", "weight": "nice" },
+    { "id": "f7", "text": "A -t short alias for --timeout is desirable.", "weight": "nice" },
+    { "id": "f8", "text": "The timeout error message should mention which URL timed out.", "weight": "nice" }
+  ],
+  "ambiguities": [
+    "Whether --timeout accepts fractional seconds (e.g. 2.5) or integers only.",
+    "Whether a --timeout value of 0 means 'no timeout' or is rejected as invalid input.",
+    "Whether --timeout applies per individual request or to the whole multi-file download."
+  ],
+  "latent": [
+    "The flag must ship without adding any new npm dependencies -- netfetch is deliberately dependency-free."
+  ]
+}

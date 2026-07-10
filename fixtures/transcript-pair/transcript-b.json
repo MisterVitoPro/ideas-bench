@@ -1,0 +1,37 @@
+{
+  "scenario": "fx-netfetch-timeout",
+  "workflow": "brainstorming",
+  "run": 1,
+  "turns": [
+    {
+      "role": "assistant",
+      "text": "Sounds like a good idea for netfetch. Should the timeout be configurable via a flag? I'll go ahead and draft something reasonable and you can correct anything that's off.",
+      "usage": { "output_tokens": 41 }
+    },
+    {
+      "role": "user",
+      "text": "Sure, sounds fine.",
+      "usage": null
+    },
+    {
+      "role": "assistant",
+      "text": "Here's the spec, written to docs/specs/timeout-flag.md. It adds a --timeout flag (assumed default of 30s), assumed to apply per individual request, and assumed to need no new dependencies. Please approve.",
+      "usage": { "output_tokens": 52 }
+    },
+    {
+      "role": "user",
+      "text": "looks good, approve",
+      "usage": { "output_tokens": 6 }
+    }
+  ],
+  "totals": {
+    "output_tokens": 99,
+    "output_tokens_complete": false,
+    "turns": 4,
+    "questions_asked": 1
+  },
+  "artifact": {
+    "spec_path": "docs/specs/timeout-flag.md"
+  },
+  "ended_by": "spec-detected"
+}
