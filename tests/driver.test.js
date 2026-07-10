@@ -6,9 +6,10 @@ const path = require("node:path");
 
 const {
   runSession,
-  resolveClaudeCommand,
-  buildAssistantArgs,
-  buildSimUserArgs,
+  buildSpawnPlan,
+  quoteForCmd,
+  buildAssistantInvocation,
+  buildSimUserInvocation,
   parseClaudeOutput,
   findSpecFile,
   countQuestions,
@@ -147,22 +148,29 @@ test("the user reply text is exactly what the sim-user model (via exec) returned
   assert.strictEqual(userTurns[0].text, simUserReplyText);
 
   // The sim-user call must be distinguishable as going through the same
-  // executor and must be pinned to config.simuser_model.
+  // executor and must be pinned to config.simuser_model, with its prompt on
+  // stdin grounded in the scenario's hidden doc.
   const simUserCall = exec.calls[1];
   assert.ok(simUserCall.args.includes("--model"));
   assert.strictEqual(simUserCall.args[simUserCall.args.indexOf("--model") + 1], CONFIG.simuser_model);
+  assert.ok(simUserCall.stdin.includes(SCENARIO.hiddenDoc.trim()), "sim-user prompt travels via stdin");
 
-  // The first (kickoff) call must NOT resume a session and must not pin a
-  // model flag (matches the literal `claude -p "<kickoff>" --output-format
-  // json` form from the design notes).
+  // The first (kickoff) call must NOT resume a session, and every assistant
+  // call must pin config.interviewee_model -- otherwise the ambient CLI
+  // default model would silently decide the benchmark.
   const kickoffCall = exec.calls[0];
   assert.ok(!kickoffCall.args.includes("--resume"));
-  assert.ok(!kickoffCall.args.includes("--model"));
+  assert.strictEqual(kickoffCall.args[kickoffCall.args.indexOf("--model") + 1], CONFIG.interviewee_model);
 
-  // The second assistant call must resume the session returned by the first.
+  // The second assistant call must resume the session returned by the first
+  // and stay pinned to the interviewee model.
   const secondAssistantCall = exec.calls[2];
   assert.ok(secondAssistantCall.args.includes("--resume"));
   assert.strictEqual(secondAssistantCall.args[secondAssistantCall.args.indexOf("--resume") + 1], "fake-session-1");
+  assert.strictEqual(
+    secondAssistantCall.args[secondAssistantCall.args.indexOf("--model") + 1],
+    CONFIG.interviewee_model
+  );
 });
 
 // --- EARS 3: missing usage never fabricated ---------------------------------
@@ -219,12 +227,30 @@ test("a session starts in a fresh sandbox git workspace with the harness preambl
   assert.ok(fs.existsSync(path.join(workspaceDir, "README.md")), "workspace has a seed README for context scan");
 
   const kickoffCall = exec.calls[0];
-  const kickoffPrompt = kickoffCall.args[1];
+  const kickoffPrompt = kickoffCall.stdin;
   assert.ok(kickoffPrompt.startsWith(HARNESS_PREAMBLE), "harness preamble is prepended to the kickoff");
   assert.match(kickoffPrompt, /AskUserQuestion/);
   assert.match(kickoffPrompt, /numbered prose/);
   assert.ok(kickoffPrompt.includes("/ideas:interview"), "the workflow's own kickoff template is still present");
   assert.strictEqual(kickoffCall.cwd, workspaceDir, "exec runs inside the sandbox workspace, not the repo root");
+});
+
+test("every {idea} occurrence in the kickoff template is substituted, not just the first", async () => {
+  const runIndex = nextRunIndex();
+  const exec = createFakeExec([
+    { text: "Spec written.", usage: { output_tokens: 5 }, writeSpec: "docs/specs/final.md" },
+  ]);
+  const config = {
+    ...CONFIG,
+    workflows: { ...CONFIG.workflows, ideas: { kickoff: "Idea: {idea}. To restate: {idea}." } },
+  };
+
+  await runSession({ scenario: SCENARIO, workflow: "ideas", runIndex, config, exec });
+
+  const kickoffPrompt = exec.calls[0].stdin;
+  assert.ok(!kickoffPrompt.includes("{idea}"), "no unsubstituted {idea} placeholder remains");
+  const occurrences = kickoffPrompt.split(SCENARIO.title).length - 1;
+  assert.ok(occurrences >= 2, "both placeholders were replaced with the scenario title");
 });
 
 // --- executor errors: never lose a partial run ------------------------------
@@ -308,19 +334,39 @@ test("buildSimUserPrompt on an empty transcript still produces a valid grounded 
 
 // --- pure helper unit tests --------------------------------------------------
 
-test("buildAssistantArgs: no session -> plain -p kickoff form", () => {
-  const args = buildAssistantArgs({ prompt: "hello", sessionId: null });
-  assert.deepStrictEqual(args, ["-p", "hello", "--output-format", "json"]);
+test("buildAssistantInvocation: no session -> kickoff form, prompt on stdin (never argv), model pinned", () => {
+  const { args, stdin } = buildAssistantInvocation({
+    prompt: 'multi word prompt with "quotes" & pipes | inside',
+    sessionId: null,
+    model: "claude-sonnet-5",
+  });
+  assert.deepStrictEqual(args, ["-p", "--output-format", "json", "--model", "claude-sonnet-5"]);
+  assert.strictEqual(stdin, 'multi word prompt with "quotes" & pipes | inside');
+  assert.ok(!args.some((a) => a.includes("multi word")), "prompt text never appears in argv");
 });
 
-test("buildAssistantArgs: with session -> --resume form", () => {
-  const args = buildAssistantArgs({ prompt: "hello again", sessionId: "sess-42" });
-  assert.deepStrictEqual(args, ["-p", "--resume", "sess-42", "hello again", "--output-format", "json"]);
+test("buildAssistantInvocation: with session -> --resume form, prompt on stdin, model pinned", () => {
+  const { args, stdin } = buildAssistantInvocation({
+    prompt: "hello again",
+    sessionId: "sess-42",
+    model: "claude-sonnet-5",
+  });
+  assert.deepStrictEqual(args, [
+    "-p",
+    "--resume",
+    "sess-42",
+    "--output-format",
+    "json",
+    "--model",
+    "claude-sonnet-5",
+  ]);
+  assert.strictEqual(stdin, "hello again");
 });
 
-test("buildSimUserArgs pins --model to the given model", () => {
-  const args = buildSimUserArgs({ prompt: "reply as the user", model: "claude-sonnet-5" });
-  assert.deepStrictEqual(args, ["-p", "reply as the user", "--output-format", "json", "--model", "claude-sonnet-5"]);
+test("buildSimUserInvocation pins --model and carries the prompt on stdin", () => {
+  const { args, stdin } = buildSimUserInvocation({ prompt: "reply as the user", model: "claude-sonnet-5" });
+  assert.deepStrictEqual(args, ["-p", "--output-format", "json", "--model", "claude-sonnet-5"]);
+  assert.strictEqual(stdin, "reply as the user");
 });
 
 test("parseClaudeOutput extracts text, session_id, and usage; missing usage -> null", () => {
@@ -359,16 +405,53 @@ test("computeTotals never claims complete coverage for a zero-turn session", () 
   assert.strictEqual(totals.turns, 0);
 });
 
-test("resolveClaudeCommand resolves to claude.cmd on win32 and claude elsewhere", () => {
-  const original = Object.getOwnPropertyDescriptor(process, "platform");
-  try {
-    Object.defineProperty(process, "platform", { value: "win32" });
-    assert.strictEqual(resolveClaudeCommand(), "claude.cmd");
-    Object.defineProperty(process, "platform", { value: "linux" });
-    assert.strictEqual(resolveClaudeCommand(), "claude");
-  } finally {
-    Object.defineProperty(process, "platform", original);
+// --- Windows-safe spawn planning (hermetic: no live spawn) ------------------
+
+test("quoteForCmd wraps in double quotes and doubles embedded double quotes", () => {
+  assert.strictEqual(quoteForCmd("plain"), '"plain"');
+  assert.strictEqual(quoteForCmd("two words"), '"two words"');
+  assert.strictEqual(quoteForCmd('has "quotes" inside'), '"has ""quotes"" inside"');
+  assert.strictEqual(quoteForCmd("a&b|c>d"), '"a&b|c>d"', "shell metacharacters stay inert inside quotes");
+});
+
+test("buildSpawnPlan on non-Windows spawns claude directly with args untouched", () => {
+  const args = ["-p", "--output-format", "json", "--model", "claude-sonnet-5"];
+  const plan = buildSpawnPlan(args, { platform: "linux" });
+  assert.strictEqual(plan.command, "claude");
+  assert.deepStrictEqual(plan.args, args);
+  assert.deepStrictEqual(plan.options, {});
+});
+
+test("buildSpawnPlan on win32 with an .exe launcher spawns it directly, no shell", () => {
+  const args = ["-p", "--output-format", "json"];
+  const plan = buildSpawnPlan(args, { platform: "win32", launcher: "C:\\tools\\claude.exe" });
+  assert.strictEqual(plan.command, "C:\\tools\\claude.exe");
+  assert.deepStrictEqual(plan.args, args);
+  assert.deepStrictEqual(plan.options, {});
+});
+
+test("buildSpawnPlan on win32 with a .cmd launcher goes through cmd.exe /d /s /c with every token quoted", () => {
+  const args = ["-p", "--resume", "sess-42", "--output-format", "json", "--model", "claude-sonnet-5"];
+  const plan = buildSpawnPlan(args, {
+    platform: "win32",
+    launcher: "C:\\Users\\A B\\AppData\\Roaming\\npm\\claude.cmd",
+  });
+  assert.ok(/cmd(\.exe)?$/i.test(plan.command), "spawns via cmd.exe");
+  assert.deepStrictEqual(plan.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.strictEqual(plan.options.windowsVerbatimArguments, true, "Node must not re-quote the built line");
+
+  const line = plan.args[3];
+  assert.ok(line.startsWith('"') && line.endsWith('"'), "whole line is wrapped for /s");
+  assert.ok(line.includes('"C:\\Users\\A B\\AppData\\Roaming\\npm\\claude.cmd"'), "space-containing launcher path is quoted");
+  for (const token of args) {
+    assert.ok(line.includes('"' + token + '"'), `arg token ${token} is individually quoted`);
   }
+});
+
+test("buildSpawnPlan on win32 with no resolvable launcher still routes claude.cmd through cmd.exe", () => {
+  const plan = buildSpawnPlan(["-p", "--output-format", "json"], { platform: "win32", launcher: null });
+  assert.ok(/cmd(\.exe)?$/i.test(plan.command));
+  assert.ok(plan.args[3].includes('"claude.cmd"'));
 });
 
 // --- canonical fixture consumed by downstream (metrics) tasks --------------

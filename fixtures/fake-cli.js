@@ -6,9 +6,10 @@ const path = require("node:path");
 //
 // A scripted state machine standing in for the real `claude` CLI, so
 // bench/tests/driver.test.js can drive runSession() with zero network calls
-// and zero real model invocations. Implements the same {args, cwd} ->
-// Promise<{stdout}> contract as the real executor (see driver.js's
-// claudeCliExec): runSession() cannot tell the difference.
+// and zero real model invocations. Implements the same {args, stdin, cwd}
+// -> Promise<{stdout}> contract as the real executor (see driver.js's
+// claudeCliExec -- the prompt travels via stdin, argv carries only fixed
+// flag tokens): runSession() cannot tell the difference.
 //
 // `steps` is consumed strictly in call order -- one step per exec() call,
 // whether that call is the interviewee/workflow turn or the sim-user turn.
@@ -23,20 +24,21 @@ const path = require("node:path");
 //        artifact on this turn.
 //   { error: "message" }
 //     -- rejects the exec() call, simulating an executor failure.
-//   a function ({ args, cwd }) => any
+//   a function ({ args, stdin, cwd }) => any
 //     -- escape hatch for tests that need custom behavior per call.
 //
 // The returned function also exposes `.calls`, an array of every {args,
-// cwd} it was invoked with, in order -- so tests can assert on exactly what
-// the driver asked the executor to run (e.g. that the sim-user call carries
-// --model, or that the first call's prompt includes the harness preamble).
+// stdin, cwd} it was invoked with, in order -- so tests can assert on
+// exactly what the driver asked the executor to run (e.g. that the sim-user
+// call carries --model, or that the first call's stdin prompt includes the
+// harness preamble).
 function createFakeExec(steps) {
   const script = Array.isArray(steps) ? steps.slice() : [];
   let cursor = 0;
   const calls = [];
 
-  const fakeExec = async function fakeExec({ args, cwd }) {
-    calls.push({ args, cwd });
+  const fakeExec = async function fakeExec({ args, stdin, cwd }) {
+    calls.push({ args, stdin, cwd });
 
     if (cursor >= script.length) {
       throw new Error(
@@ -46,7 +48,7 @@ function createFakeExec(steps) {
     const step = script[cursor++];
 
     if (typeof step === "function") {
-      return step({ args, cwd });
+      return step({ args, stdin, cwd });
     }
 
     if (step && step.error) {
