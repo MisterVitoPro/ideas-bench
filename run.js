@@ -214,7 +214,11 @@ function readSpecText(transcript) {
   if (!specPath) return null;
   const workspaceDir = path.join(path.dirname(transcriptPath(transcript.scenario, transcript.workflow, transcript.run)), "workspace");
   try {
-    return fs.readFileSync(path.join(workspaceDir, specPath), "utf8");
+    // Ingestion seam: the produced spec is a file written inside the sandbox
+    // workspace, so on Windows it may carry CRLF -- normalize here so both
+    // tier B (raw spec text in the fact-judge prompt) and tier C (maskSpec)
+    // consistently receive LF, matching the CLI-output seam in driver.js.
+    return fs.readFileSync(path.join(workspaceDir, specPath), "utf8").replace(/\r\n/g, "\n");
   } catch {
     return null;
   }

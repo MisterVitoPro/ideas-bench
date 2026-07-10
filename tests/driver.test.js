@@ -377,6 +377,18 @@ test("parseClaudeOutput extracts text, session_id, and usage; missing usage -> n
   assert.deepStrictEqual(withoutUsage, { text: "hi", sessionId: "s1", usage: null });
 });
 
+// Regression: a fresh Windows checkout (git autocrlf) or a CLI echoing
+// Windows-authored file content can hand parseClaudeOutput a result string
+// containing CRLF. This must normalize to LF identically to an LF input --
+// see judge.js maskSpec, which silently no-ops its H1 title strip on
+// unnormalized CRLF text (the bug this regression pins).
+test("parseClaudeOutput normalizes CRLF result text to LF, matching the LF-input result exactly", () => {
+  const lf = parseClaudeOutput(JSON.stringify({ result: "line one\nline two\nline three", session_id: "s1" }));
+  const crlf = parseClaudeOutput(JSON.stringify({ result: "line one\r\nline two\r\nline three", session_id: "s1" }));
+  assert.deepStrictEqual(crlf, lf);
+  assert.ok(!crlf.text.includes("\r"), "no stray \\r survives normalization");
+});
+
 test("findSpecFile finds docs/specs/*.md and docs/superpowers/specs/*.md, skips ledgers, returns posix-relative path", () => {
   const tmp = fs.mkdtempSync(path.join(RUNS_ROOT, "..", "tmp-findspec-"));
   try {

@@ -318,6 +318,30 @@ test("tierC masks workflow-identifying titles before judging (spec-honest.md / s
   assert.ok(assumptionsIdx >= 0 && requirementsIdx >= 0 && assumptionsIdx < requirementsIdx);
 });
 
+// Regression: a fresh Windows checkout (git autocrlf) materializes working
+// files with CRLF. maskSpec's H1-title strip is line-anchored and silently
+// no-oped on CRLF input before this fix -- SPEC_HONEST/SPEC_SILENT above are
+// read raw via loadText (no normalization at the test level), so on a CRLF
+// checkout they already exercise exactly the bytes that broke production.
+// This test additionally pins maskSpec and countQuestions against explicit
+// CRLF variants so the guarantee holds regardless of the checkout's own
+// line-ending config.
+test("maskSpec and countQuestions are line-ending-proof: CRLF input matches LF input exactly", () => {
+  const lfHonest = SPEC_HONEST.replace(/\r\n/g, "\n");
+  const crlfHonest = lfHonest.replace(/\n/g, "\r\n");
+  const lfSilent = SPEC_SILENT.replace(/\r\n/g, "\n");
+  const crlfSilent = lfSilent.replace(/\n/g, "\r\n");
+
+  assert.strictEqual(maskSpec(crlfHonest), maskSpec(lfHonest));
+  assert.strictEqual(maskSpec(crlfSilent), maskSpec(lfSilent));
+  assert.ok(!maskSpec(crlfHonest).includes("ideas:interview"), "CRLF input still strips the title tell");
+  assert.ok(!maskSpec(crlfHonest).includes("\r"), "no stray \\r survives maskSpec");
+
+  const questionsText = "1. What flag name?\n2. What date format?\nShould it support Windows? And macOS?";
+  const crlfQuestionsText = questionsText.replace(/\n/g, "\r\n");
+  assert.strictEqual(countQuestions(crlfQuestionsText), countQuestions(questionsText));
+});
+
 test("tierC judges all 5 dimensions, each order-swapped and averaged, recording both raw orderings", async () => {
   const exec = createFakeExec(honestSilentScript());
 
