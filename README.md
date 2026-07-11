@@ -147,25 +147,66 @@ in code comments and in `report.md`:
   `transcript.error` records the message, and `transcript.json` is still written with
   whatever turns completed before the failure.
 
-## Tier D — downstream outcome (not automated)
+## Tier D (automated) — downstream outcome
 
 Spec section 13 names tier D ("the same fixed executor implements from each spec with no
 access to the hidden doc; the held-out acceptance suite decides. Pass rate is the primary
-metric of the whole benchmark") for a subset of 6-8 scenarios. **This version of the
-harness does not automate tier D.** It is a manual procedure:
+metric of the whole benchmark") for a subset of scenarios. `tier-d.js` automates the
+whole pipeline:
 
-1. For each scenario in the tier D subset, take the spec each workflow produced for one
-   run (from `runs/<scenario>/<workflow>/run<N>/workspace/<spec_path>`).
-2. Feed each spec, with no access to the scenario's `hidden-doc.md`, to the same fixed
-   executor (a `claude -p` session, or whatever downstream implementer you're holding
-   constant across both sides).
-3. Run the scenario's held-out `acceptance.md` checklist against what got built.
-4. Record `{scenarioId, ideas_pass, brainstorming_pass}` for each scenario into a JSON
-   array and save it to `runs/tier-d-results.json`.
-5. Re-run `node run.js report` -- it detects the file and renders the Tier D
-   section with the paired pass-rate table and an exact-binomial (sign test) p-value.
-   Without that file, `report.md` renders Tier D as **"not run"**, plainly, rather than
-   silently omitting the section or implying a null result is a loss.
+```
+node tier-d.js run [--scenario <id>] [--dry-run]
+```
+
+Per scenario x side (`ideas`, `brainstorming`):
+
+1. **Spec selection.** From `runs/<scenario>/<side>/run1..3`, pick the FIRST run whose
+   `transcript.json` names `artifact.spec_path` AND that file still exists in the run's
+   workspace. If no run in range qualifies (some scenario x side cells, e.g. s05 x
+   brainstorming, plausibly never produce a spec at all), that side's pass is `null` with
+   reason `"no spec produced"` -- never a guess.
+2. **Fresh sandbox.** `runs/tier-d/<scenario>/<side>/workspace` is wiped and recreated,
+   `git init` best-effort, and the selected spec is copied in as `SPEC.md` (line endings
+   normalized).
+3. **Fixed executor -- ONE call.** Pinned to `config.interviewee_model`,
+   `--permission-mode acceptEdits`, prompt on stdin, `cwd` = the sandbox: "Implement the
+   specification in SPEC.md, in this workspace. Work only from the spec; where it is
+   silent, make reasonable choices and note them in IMPLEMENTATION-NOTES.md. Produce
+   real, runnable code with tests where the spec calls for them. Do not ask questions -
+   there is no user." It never sees the scenario's `hidden-doc.md` -- this is the whole
+   point of tier D: the same executor, working only from what each workflow's interview
+   actually produced.
+4. **Checklist judge -- ONE call.** Pinned to `config.judge_model`. The prompt carries
+   the scenario's `acceptance.md` checklist verbatim plus a bounded inventory of the
+   built workspace (file tree + contents of source/docs files, capped at ~6000
+   characters per file and ~40000 characters total; `SPEC.md`, `.git/`, and
+   `node_modules/` are excluded; any truncation is disclosed honestly in the prompt, not
+   silently dropped). The judge decides required-vs-nice-to-have itself from each
+   item's text (a literal `"(Nice-to-have)"` marker means optional) and returns strict
+   JSON: `{"items": [{"text", "required", "verdict": "pass"|"fail"|"unverifiable"}, ...]}`.
+5. **Pass rule (pre-declared).** A side passes iff **every required item's verdict is
+   `"pass"`**. `"unverifiable"` is never a pass, and a failing/unverifiable nice-to-have
+   never blocks a pass. Per-item detail (every verdict, the spec run picked, any failure
+   reason) is written to `runs/tier-d-details.json` for audit; the summary
+   (`[{scenarioId, ideas_pass, brainstorming_pass}]`) is written to
+   `runs/tier-d-results.json`, which `node run.js report` already picks up automatically
+   -- run `report` again after `tier-d.js` to render the Tier D section with the paired
+   pass-rate table and an exact-binomial (sign test) p-value. Without that file,
+   `report.md` still renders Tier D as **"not run"**, plainly, rather than silently
+   omitting the section or implying a null result is a loss.
+
+Parsing is defensive throughout, matching the rest of this harness's honesty invariants:
+a malformed judge response, a failed executor call, or a failed judge call all produce
+`pass: null` for that side plus a recorded reason -- never a fabricated verdict.
+
+**Cost note.** Two build sessions (one fixed-executor call per side) plus two judge calls
+per scenario -- 4 `claude -p` invocations per scenario, independent of `run`/`score`'s own
+cost (see "Cost expectations" above).
+
+`--dry-run` drives the identical pipeline against an in-process scripted fake executor,
+writing under `runs-dry/tier-d/` (and `runs-dry/tier-d-results.json` /
+`runs-dry/tier-d-details.json`) instead of `runs/` -- zero network, exit 0, same
+segregation guarantee as `run.js`'s own `--dry-run`.
 
 ## Pinned versions
 
