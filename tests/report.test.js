@@ -231,6 +231,68 @@ test("evaluateSuccessBar FAILs when tier D is present and ideas loses it, even w
   assert.strictEqual(result.tierDPass, false);
 });
 
+// =============================================================================
+// evaluateSuccessBar: tier D's graded required-items pass fraction gate
+// (fixes the binary floor effect -- see lib/tierd.js's
+// computeRequiredPassFraction). Uses the graded fraction when present,
+// falls back to the binary pass rate when it isn't -- back-compat with a
+// tier-d-results.json that never supplied ideas_frac/brainstorming_frac.
+// =============================================================================
+
+test("evaluateSuccessBar's tier D gate uses the GRADED fraction, not the binary rate, when both are present and disagree", () => {
+  const tokenSummary = summaryOf([300, 300], [600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5], [2.5, 2.5]);
+  const userBurdenSummary = summaryOf([60], [90]);
+  // Binary rate: ideas 0 < brainstorming 1 (would FAIL on binary alone).
+  const tierDSummary = summaryOf([0, 0], [1, 1]);
+  // Graded fraction: ideas 0.9 >= brainstorming 0.8 (ideas actually ahead).
+  const tierDGradedSummary = summaryOf([0.9, 0.9], [0.8, 0.8]);
+
+  const result = evaluateSuccessBar({
+    tokenSummary,
+    tierCCompositeSummary: tierCSummary,
+    userBurdenSummary,
+    tierDSummary,
+    tierDGradedSummary,
+  });
+  assert.strictEqual(result.tierDPass, true, "the graded fraction (0.9 >= 0.8) wins over the binary rate (0 < 1)");
+  assert.strictEqual(result.verdict, "PASS");
+});
+
+test("evaluateSuccessBar falls back to the binary tier D rate when no graded summary is supplied (back-compat)", () => {
+  const tokenSummary = summaryOf([300, 300], [600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5], [2.5, 2.5]);
+  const userBurdenSummary = summaryOf([60], [90]);
+  const tierDSummary = summaryOf([1, 1], [0, 0]); // binary: ideas wins
+
+  const result = evaluateSuccessBar({
+    tokenSummary,
+    tierCCompositeSummary: tierCSummary,
+    userBurdenSummary,
+    tierDSummary,
+    // tierDGradedSummary omitted entirely
+  });
+  assert.strictEqual(result.tierDPass, true);
+  assert.strictEqual(result.verdict, "PASS");
+});
+
+test("evaluateSuccessBar falls back to the binary tier D rate when the graded summary has no usable paired data", () => {
+  const tokenSummary = summaryOf([300, 300], [600, 600]);
+  const tierCSummary = summaryOf([4.5, 4.5], [2.5, 2.5]);
+  const userBurdenSummary = summaryOf([60], [90]);
+  const tierDSummary = summaryOf([1, 1], [0, 0]); // binary: ideas wins
+  const tierDGradedSummary = summaryOf([null, null], [null, null]); // n=0 -- no usable fracs
+
+  const result = evaluateSuccessBar({
+    tokenSummary,
+    tierCCompositeSummary: tierCSummary,
+    userBurdenSummary,
+    tierDSummary,
+    tierDGradedSummary,
+  });
+  assert.strictEqual(result.tierDPass, true, "falls back to binary since the graded summary carries no data");
+});
+
 test("evaluateSuccessBar reports INSUFFICIENT-DATA (never PASS or FAIL) when the token metric family is entirely null", () => {
   const tokenSummary = summaryOf([null, null], [null, null]); // n=0
   const tierCSummary = summaryOf([4.5, 4.5], [2.5, 2.5]);
@@ -391,6 +453,50 @@ test("buildReport renders tier D pass-rate table with exact-binomial p when resu
   assert.match(md, /Tier D/);
   assert.doesNotMatch(md.split(/## Tier D/)[1].split(/\n## /)[0], /not run/i);
   assert.match(md, /binomial/i);
+});
+
+// =============================================================================
+// buildReport / buildTierDSection: the graded required-items pass fraction
+// row (fixes the binary floor effect). Optional and back-compat: it only
+// renders when at least one tier-d-results.json entry carries a numeric
+// ideas_frac/brainstorming_frac -- the binary "Tier D pass rate" row always
+// renders regardless.
+// =============================================================================
+
+test("buildReport renders BOTH the binary pass-rate row and the graded pass-fraction row when fracs are present", () => {
+  const tierD = [
+    { scenarioId: "s01", ideas_pass: false, brainstorming_pass: false, ideas_frac: 0.9, brainstorming_frac: 0.2 },
+    { scenarioId: "s02", ideas_pass: false, brainstorming_pass: false, ideas_frac: 0.8, brainstorming_frac: 0.3 },
+  ];
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD, config: CONFIG, versions: {} });
+  const tierDSection = md.split(/## Tier D/)[1].split(/\n## /)[0];
+
+  assert.match(tierDSection, /Tier D pass rate/, "the binary row still renders");
+  assert.match(tierDSection, /Required-items pass fraction \(graded\)/, "the graded row renders");
+});
+
+test("buildReport renders ONLY the binary pass-rate row when no entry supplies fracs (back-compat)", () => {
+  const tierD = [
+    { scenarioId: "s01", ideas_pass: true, brainstorming_pass: false },
+    { scenarioId: "s02", ideas_pass: true, brainstorming_pass: true },
+  ];
+  const md = buildReport({ scenarios: sixWinningScenarios(), tierD, config: CONFIG, versions: {} });
+  const tierDSection = md.split(/## Tier D/)[1].split(/\n## /)[0];
+
+  assert.match(tierDSection, /Tier D pass rate/);
+  assert.doesNotMatch(tierDSection, /Required-items pass fraction \(graded\)/);
+});
+
+test("buildReport's tier D match-or-beat bullet discloses whether it used the graded fraction or the binary rate", () => {
+  const gradedTierD = [
+    { scenarioId: "s01", ideas_pass: false, brainstorming_pass: false, ideas_frac: 0.9, brainstorming_frac: 0.2 },
+  ];
+  const gradedMd = buildReport({ scenarios: sixWinningScenarios(), tierD: gradedTierD, config: CONFIG, versions: {} });
+  assert.match(gradedMd, /Tier D match-or-beat:.*graded required-items pass fraction/);
+
+  const binaryTierD = [{ scenarioId: "s01", ideas_pass: true, brainstorming_pass: false }];
+  const binaryMd = buildReport({ scenarios: sixWinningScenarios(), tierD: binaryTierD, config: CONFIG, versions: {} });
+  assert.match(binaryMd, /Tier D match-or-beat:.*binary pass rate/);
 });
 
 test("buildReport's mandatory Caveats section covers pilot N, prose-mode, same-family judge, and sim-user relativity", () => {

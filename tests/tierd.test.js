@@ -2,6 +2,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const {
@@ -15,6 +16,7 @@ const {
   buildChecklistJudgePrompt,
   parseChecklistJudgeResponse,
   computePass,
+  computeRequiredPassFraction,
   runTierDSide,
   runTierD,
 } = require("../lib/tierd");
@@ -30,8 +32,15 @@ const ROOT = path.join(BENCH_ROOT, "runs-dry", "tierd-lib-test");
 const TIERD_ROOT = path.join(ROOT, "tier-d");
 fs.mkdirSync(ROOT, { recursive: true });
 
+// Sandboxes now build OUTSIDE the data tree entirely (see lib/tierd.js's
+// buildSandbox doc comment on the incident this fixes) -- this is the one
+// tmpRoot every buildSandbox-level test in this file shares, itself safely
+// scoped under os.tmpdir() and cleaned up at test.after like ROOT above.
+const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "ideas-bench-tierd-test-"));
+
 test.after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
+  fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
 // --- test fixtures -----------------------------------------------------------
@@ -127,8 +136,25 @@ test("selectSpecRun returns null when the scenario/side has no run directories o
 });
 
 // =============================================================================
-// buildSandbox -- fresh workspace, spec copied in as SPEC.md, CRLF normalized
+// buildSandbox -- fresh workspace OUTSIDE the data tree, spec copied in as
+// SPEC.md, CRLF normalized (isolation fix: an earlier version built directly
+// under runs/tier-d/<scenario>/<side>/workspace, and a fixed executor's own
+// build tooling once destroyed real run data (runs/s03..s05) that happened
+// to sit nearby on that shared tree).
 // =============================================================================
+
+test("buildSandbox builds OUTSIDE the data tree, under the caller's tmpRoot", () => {
+  const scenarioId = "sbx-isolation";
+  writeTranscript(ROOT, scenarioId, "ideas", 1, { specPath: "docs/specs/a.md", specContent: "# A\n" });
+  const selected = selectSpecRun({ scenarioId, side: "ideas", config: CONFIG, root: ROOT });
+
+  const workspaceDir = buildSandbox({ tmpRoot: TMP_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
+
+  assert.ok(workspaceDir.startsWith(TMP_ROOT), "sandbox lives under the supplied tmpRoot");
+  assert.ok(!workspaceDir.includes(path.sep + "runs" + path.sep), "sandbox path never runs through a runs/ segment");
+  assert.ok(!workspaceDir.includes(path.sep + "runs-dry" + path.sep), "sandbox path never runs through a runs-dry/ segment");
+  assert.ok(fs.existsSync(path.join(workspaceDir, "SPEC.md")));
+});
 
 test("buildSandbox copies the spec in as SPEC.md with CRLF normalized to LF", () => {
   const scenarioId = "sbx-crlf";
@@ -138,7 +164,7 @@ test("buildSandbox copies the spec in as SPEC.md with CRLF normalized to LF", ()
   });
   const selected = selectSpecRun({ scenarioId, side: "ideas", config: CONFIG, root: ROOT });
 
-  const workspaceDir = buildSandbox({ tierDRoot: TIERD_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
+  const workspaceDir = buildSandbox({ tmpRoot: TMP_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
 
   const specText = fs.readFileSync(path.join(workspaceDir, "SPEC.md"), "utf8");
   assert.strictEqual(specText, "# Spec\nLine two\nLine three\n");
@@ -150,11 +176,11 @@ test("buildSandbox wipes a stale prior build before copying in the new spec", ()
   writeTranscript(ROOT, scenarioId, "ideas", 1, { specPath: "docs/specs/a.md", specContent: "# A\n" });
   const selected = selectSpecRun({ scenarioId, side: "ideas", config: CONFIG, root: ROOT });
 
-  const first = buildSandbox({ tierDRoot: TIERD_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
+  const first = buildSandbox({ tmpRoot: TMP_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
   fs.writeFileSync(path.join(first, "leftover-from-attempt-one.txt"), "stale build artifact");
   assert.ok(fs.existsSync(path.join(first, "leftover-from-attempt-one.txt")));
 
-  const second = buildSandbox({ tierDRoot: TIERD_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
+  const second = buildSandbox({ tmpRoot: TMP_ROOT, scenarioId, side: "ideas", specFullPath: selected.specFullPath });
   assert.strictEqual(second, first, "same sandbox path across rebuilds");
   assert.ok(!fs.existsSync(path.join(second, "leftover-from-attempt-one.txt")), "stale file was wiped");
   assert.ok(fs.existsSync(path.join(second, "SPEC.md")), "SPEC.md is still (re-)written");
@@ -236,9 +262,11 @@ test("countChecklistItems counts every '- [ ] ...' bullet, including nice-to-hav
   assert.strictEqual(countChecklistItems(null), 0);
 });
 
+const SPEC_TEXT = "# Spec\n\nA staged rollout: phase 1 ships behind a flag, phase 2 removes the flag next release.\n";
+
 test("buildChecklistJudgePrompt embeds the checklist verbatim, the inventory, and discloses truncation honestly", () => {
   const inv = { text: "File tree:\n- a.txt\n", truncatedFiles: ["a.txt"], omittedFiles: ["b.txt"], fileCount: 2 };
-  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv });
+  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv, specText: SPEC_TEXT });
 
   assert.ok(prompt.includes("Required item one."));
   assert.ok(prompt.includes("(Nice-to-have)"));
@@ -249,8 +277,43 @@ test("buildChecklistJudgePrompt embeds the checklist verbatim, the inventory, an
 
 test("buildChecklistJudgePrompt reports no truncation when the inventory has none", () => {
   const inv = { text: "File tree:\n- a.txt\n", truncatedFiles: [], omittedFiles: [], fileCount: 1 };
-  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv });
+  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv, specText: SPEC_TEXT });
   assert.match(prompt, /none -- the full workspace content is shown above/);
+});
+
+// =============================================================================
+// FIX (analyst: class-D distortion + a grader inconsistency) -- the judge
+// prompt now carries the full spec text and a dual judging standard so
+// process/plan/rollout/compatibility checklist items are judged against the
+// spec's stated plan rather than unjudgeable from the built inventory alone.
+// =============================================================================
+
+test("buildChecklistJudgePrompt embeds the full SPEC.md text given to the fixed executor", () => {
+  const inv = { text: "File tree:\n- a.txt\n", truncatedFiles: [], omittedFiles: [], fileCount: 1 };
+  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv, specText: SPEC_TEXT });
+
+  assert.ok(prompt.includes(SPEC_TEXT.trim()), "the spec text appears verbatim in the prompt");
+  assert.match(prompt, /## Specification given to the fixed executor \(SPEC\.md\)/);
+});
+
+test("buildChecklistJudgePrompt instructs a dual judging standard: built behavior vs. process/plan/rollout/compatibility items", () => {
+  const inv = { text: "File tree:\n- a.txt\n", truncatedFiles: [], omittedFiles: [], fileCount: 1 };
+  const prompt = buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv, specText: SPEC_TEXT });
+
+  assert.match(prompt, /dual judging standard/i);
+  assert.match(prompt, /BUILT BEHAVIOR/);
+  assert.match(prompt, /PROCESS, PLAN, ROLLOUT, OR COMPATIBILITY PROMISE/);
+  assert.match(prompt, /explicitly and credibly commits to it/i);
+  assert.match(prompt, /never hold one side to a stricter reading than the other/i);
+});
+
+test("buildChecklistJudgePrompt throws when specText is missing or empty (never silently judges without it)", () => {
+  const inv = { text: "File tree:\n- a.txt\n", truncatedFiles: [], omittedFiles: [], fileCount: 1 };
+  assert.throws(() => buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv }), /requires the full SPEC\.md text/);
+  assert.throws(
+    () => buildChecklistJudgePrompt({ acceptance: ACCEPTANCE, inventory: inv, specText: "   " }),
+    /requires the full SPEC\.md text/
+  );
 });
 
 // =============================================================================
@@ -341,6 +404,55 @@ test("computePass: a nice-to-have item failing does NOT block an otherwise-passi
 });
 
 // =============================================================================
+// computeRequiredPassFraction -- the graded companion metric (fixes the
+// binary floor effect: two sides that both fail can differ hugely -- 9/10
+// required items passing vs. 0/10 -- but computePass floors both to 0/false,
+// a 0-vs-0 tie that hides the real gap).
+// =============================================================================
+
+test("computeRequiredPassFraction: fraction of REQUIRED items passing, nice-to-haves excluded from the denominator", () => {
+  const items = [
+    { text: "a", required: true, verdict: "pass" },
+    { text: "b", required: true, verdict: "fail" },
+    { text: "c", required: true, verdict: "pass" },
+    { text: "d", required: false, verdict: "fail" }, // never enters the denominator
+  ];
+  assert.strictEqual(computeRequiredPassFraction(items), 2 / 3);
+});
+
+test("computeRequiredPassFraction: unverifiable counts against the fraction, same as fail", () => {
+  const items = [
+    { text: "a", required: true, verdict: "pass" },
+    { text: "b", required: true, verdict: "unverifiable" },
+  ];
+  assert.strictEqual(computeRequiredPassFraction(items), 0.5);
+});
+
+test("computeRequiredPassFraction: null when items is null or not an array (mirrors pass's null-ness)", () => {
+  assert.strictEqual(computeRequiredPassFraction(null), null);
+  assert.strictEqual(computeRequiredPassFraction(undefined), null);
+  assert.strictEqual(computeRequiredPassFraction("not an array"), null);
+});
+
+test("computeRequiredPassFraction: null (never 0 or 1) when there are zero required items", () => {
+  const items = [{ text: "a", required: false, verdict: "pass" }];
+  assert.strictEqual(computeRequiredPassFraction(items), null);
+});
+
+test("computeRequiredPassFraction: two sides that both binary-fail can still show very different graded fractions", () => {
+  const nineOfTen = Array.from({ length: 10 }, (_, i) => ({
+    text: `item ${i}`,
+    required: true,
+    verdict: i === 9 ? "fail" : "pass",
+  }));
+  const zeroOfTen = Array.from({ length: 10 }, (_, i) => ({ text: `item ${i}`, required: true, verdict: "fail" }));
+  assert.strictEqual(computePass(nineOfTen), false);
+  assert.strictEqual(computePass(zeroOfTen), false);
+  assert.strictEqual(computeRequiredPassFraction(nineOfTen), 0.9);
+  assert.strictEqual(computeRequiredPassFraction(zeroOfTen), 0);
+});
+
+// =============================================================================
 // runTierDSide -- end-to-end per side, via a scripted fake executor
 // =============================================================================
 
@@ -388,6 +500,7 @@ test("runTierDSide: one fixed-executor call then one judge call; passes when eve
   assert.strictEqual(result.items.length, 3);
   assert.strictEqual(result.reason, null);
   assert.strictEqual(result.specRun, 1);
+  assert.strictEqual(result.frac, 1, "both required items passed -> graded fraction 1");
   assert.strictEqual(exec.calls.length, 2, "exactly one executor call and one judge call");
 
   // The fixed-executor call: one shot, no --resume, pinned to interviewee_model,
@@ -403,6 +516,87 @@ test("runTierDSide: one fixed-executor call then one judge call; passes when eve
   const judgeCall = exec.calls[1];
   assert.strictEqual(judgeCall.args[judgeCall.args.indexOf("--model") + 1], CONFIG.judge_model);
   assert.ok(!judgeCall.args.includes("--permission-mode"));
+
+  // The judge prompt carries the SPEC.md text the executor was given.
+  assert.match(judgeCall.stdin, /## Specification given to the fixed executor \(SPEC\.md\)/);
+});
+
+// =============================================================================
+// runTierDSide -- build isolation + persisted forensics (fixes 1 and 2)
+// =============================================================================
+
+test("runTierDSide: the fixed executor's cwd is OUTSIDE the data tree (runs/, runs-dry/) -- build isolation fix", async () => {
+  const scenario = makeScenario("side-isolation");
+  writeTranscript(ROOT, scenario.id, "ideas", 1, { specPath: "docs/specs/spec.md" });
+
+  const exec = createFakeExec([
+    { text: "Implemented.", usage: { output_tokens: 10 } },
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+  ]);
+
+  await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT, tmpRoot: TMP_ROOT });
+
+  const buildCwd = exec.calls[0].cwd;
+  assert.ok(buildCwd.startsWith(TMP_ROOT), "the executor's build cwd lives under the caller's tmpRoot");
+  assert.ok(!buildCwd.startsWith(ROOT), "the executor's build cwd is never inside the data tree passed as root/tierDRoot");
+});
+
+test("runTierDSide: without an explicit tmpRoot, a private one is still created outside the data tree (defense in depth)", async () => {
+  const scenario = makeScenario("side-isolation-default");
+  writeTranscript(ROOT, scenario.id, "ideas", 1, { specPath: "docs/specs/spec.md" });
+
+  const exec = createFakeExec([
+    { text: "Implemented.", usage: { output_tokens: 10 } },
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+  ]);
+
+  await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT });
+
+  const buildCwd = exec.calls[0].cwd;
+  assert.ok(buildCwd.startsWith(os.tmpdir()), "auto-created tmpRoot still lands under os.tmpdir()");
+  assert.ok(!buildCwd.startsWith(ROOT), "auto-created tmpRoot is still never inside the data tree");
+});
+
+test("runTierDSide: persists the fixed executor's raw stdout + parsed text to build-output.json (forensics fix)", async () => {
+  const scenario = makeScenario("side-build-output");
+  writeTranscript(ROOT, scenario.id, "ideas", 1, { specPath: "docs/specs/spec.md" });
+
+  const exec = createFakeExec([
+    { text: "Implemented the spec, see notes.", usage: { output_tokens: 42 }, sessionId: "sess-build-output" },
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+  ]);
+
+  await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT, tmpRoot: TMP_ROOT });
+
+  const outPath = path.join(TIERD_ROOT, scenario.id, "ideas", "build-output.json");
+  assert.ok(fs.existsSync(outPath), "build-output.json was written under tierDRoot/<scenario>/<side>/");
+  const written = JSON.parse(fs.readFileSync(outPath, "utf8"));
+  assert.strictEqual(written.text, "Implemented the spec, see notes.");
+  assert.strictEqual(written.sessionId, "sess-build-output");
+  assert.strictEqual(typeof written.stdout, "string", "the raw CLI stdout is persisted, not just the parsed text");
+  assert.ok(JSON.parse(written.stdout).result, "the persisted stdout really is the raw CLI JSON envelope");
+});
+
+test("runTierDSide: persists a bounded artifact snapshot (the inventory already built) under tierDRoot/<scenario>/<side>/artifacts/", async () => {
+  const scenario = makeScenario("side-artifacts");
+  writeTranscript(ROOT, scenario.id, "ideas", 1, { specPath: "docs/specs/spec.md" });
+
+  const exec = createFakeExec([
+    (async ({ cwd }) => {
+      fs.writeFileSync(path.join(cwd, "built-file.txt"), "content the executor built");
+      return { stdout: JSON.stringify({ session_id: "s1", result: "Implemented." }) };
+    }),
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+  ]);
+
+  await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT, tmpRoot: TMP_ROOT });
+
+  const snapshotPath = path.join(TIERD_ROOT, scenario.id, "ideas", "artifacts", "inventory.txt");
+  assert.ok(fs.existsSync(snapshotPath), "the artifact snapshot was written under tierDRoot/<scenario>/<side>/artifacts/");
+  const snapshot = fs.readFileSync(snapshotPath, "utf8");
+  assert.ok(snapshot.includes("built-file.txt"), "the snapshot carries the file tree listing");
+  assert.ok(snapshot.includes("content the executor built"), "the snapshot carries the inventory text (bounded file contents)");
+  assert.ok(!snapshot.includes("SPEC.md"), "SPEC.md (the input, not an artifact) is excluded, matching buildWorkspaceInventory");
 });
 
 test("runTierDSide: a required item failing -> pass false", async () => {
@@ -425,6 +619,7 @@ test("runTierDSide: a required item failing -> pass false", async () => {
 
   const result = await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT });
   assert.strictEqual(result.pass, false);
+  assert.strictEqual(result.frac, 0.5, "one of two required items passed -> graded fraction 0.5, distinct from binary false");
 });
 
 test("runTierDSide: malformed judge JSON -> pass null with an error-note reason (never a guess)", async () => {
@@ -439,6 +634,7 @@ test("runTierDSide: malformed judge JSON -> pass null with an error-note reason 
   const result = await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT });
   assert.strictEqual(result.pass, null);
   assert.strictEqual(result.items, null);
+  assert.strictEqual(result.frac, null);
   assert.match(result.reason, /not valid JSON/);
 });
 
@@ -450,15 +646,20 @@ test("runTierDSide: a failing fixed-executor call -> pass null with an error-not
 
   const result = await runTierDSide({ scenario, side: "ideas", config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT });
   assert.strictEqual(result.pass, null);
+  assert.strictEqual(result.frac, null);
   assert.match(result.reason, /fixed-executor call failed/);
   assert.strictEqual(exec.calls.length, 1, "the judge is never called once the build call fails");
+  assert.ok(
+    !fs.existsSync(path.join(TIERD_ROOT, scenario.id, "ideas", "build-output.json")),
+    "no build-output.json is written when the executor call itself failed -- nothing to persist"
+  );
 });
 
 // =============================================================================
 // runTierD -- results shape matches run.js report.js's tier-d-results contract
 // =============================================================================
 
-test("runTierD returns results in the exact shape run.js's report expects: [{scenarioId, ideas_pass, brainstorming_pass}]", async () => {
+test("runTierD returns results in the exact shape run.js's report expects: [{scenarioId, ideas_pass, brainstorming_pass, ideas_frac, brainstorming_frac}]", async () => {
   const scenarioWithSpecs = makeScenario("matrix-both");
   writeTranscript(ROOT, scenarioWithSpecs.id, "ideas", 1, { specPath: "docs/specs/a.md" });
   writeTranscript(ROOT, scenarioWithSpecs.id, "brainstorming", 1, { specPath: "docs/specs/b.md" });
@@ -502,23 +703,62 @@ test("runTierD returns results in the exact shape run.js's report expects: [{sce
   assert.strictEqual(results.length, 2);
   for (const r of results) {
     assert.strictEqual(typeof r.scenarioId, "string");
-    assert.deepStrictEqual(Object.keys(r).sort(), ["brainstorming_pass", "ideas_pass", "scenarioId"]);
+    assert.deepStrictEqual(
+      Object.keys(r).sort(),
+      ["brainstorming_frac", "brainstorming_pass", "ideas_frac", "ideas_pass", "scenarioId"]
+    );
     assert.ok([true, false, null].includes(r.ideas_pass));
     assert.ok([true, false, null].includes(r.brainstorming_pass));
+    assert.ok(r.ideas_frac === null || typeof r.ideas_frac === "number");
+    assert.ok(r.brainstorming_frac === null || typeof r.brainstorming_frac === "number");
   }
 
   const both = results.find((r) => r.scenarioId === "matrix-both");
   assert.strictEqual(both.ideas_pass, true);
   assert.strictEqual(both.brainstorming_pass, false);
+  assert.strictEqual(both.ideas_frac, 1, "both required items on the ideas side passed");
+  assert.strictEqual(both.brainstorming_frac, 0.5, "one of two required items on the brainstorming side passed");
 
   const none = results.find((r) => r.scenarioId === "matrix-none");
   assert.strictEqual(none.ideas_pass, null);
   assert.strictEqual(none.brainstorming_pass, null);
+  assert.strictEqual(none.ideas_frac, null);
+  assert.strictEqual(none.brainstorming_frac, null);
 
   assert.strictEqual(details.length, 2, "the audit-trail file carries one entry per scenario too");
   assert.strictEqual(details[0].scenarioId, "matrix-both");
   assert.ok(details[0].ideas.items.length === 3);
   assert.strictEqual(details[1].ideas.reason, "no spec produced");
+});
+
+test("runTierD shares ONE per-invocation tmpRoot under os.tmpdir() across every scenario x side, cleaned up after the run", async () => {
+  const scenario = makeScenario("matrix-shared-tmproot");
+  writeTranscript(ROOT, scenario.id, "ideas", 1, { specPath: "docs/specs/a.md" });
+  writeTranscript(ROOT, scenario.id, "brainstorming", 1, { specPath: "docs/specs/b.md" });
+
+  const seenCwds = [];
+  const exec = createFakeExec([
+    async ({ cwd }) => {
+      seenCwds.push(cwd);
+      return { stdout: JSON.stringify({ session_id: "s1", result: "Implemented." }) };
+    },
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+    async ({ cwd }) => {
+      seenCwds.push(cwd);
+      return { stdout: JSON.stringify({ session_id: "s1", result: "Implemented." }) };
+    },
+    { text: JSON.stringify({ items: [{ text: "Required item one.", required: true, verdict: "pass" }] }), usage: { output_tokens: 10 } },
+  ]);
+
+  await runTierD({ scenarios: [scenario], config: CONFIG, exec, root: ROOT, tierDRoot: TIERD_ROOT });
+
+  assert.strictEqual(seenCwds.length, 2, "one build cwd per side");
+  const [ideasCwd, brainstormingCwd] = seenCwds;
+  assert.notStrictEqual(ideasCwd, brainstormingCwd, "each side gets its own subdirectory");
+  const ideasParent = path.dirname(path.dirname(ideasCwd)); // .../<tmpRoot>/<scenarioId>/<side> -> .../<tmpRoot>
+  const brainstormingParent = path.dirname(path.dirname(brainstormingCwd));
+  assert.strictEqual(ideasParent, brainstormingParent, "both sides share the same per-invocation tmpRoot");
+  assert.ok(!fs.existsSync(ideasParent), "the shared tmpRoot is cleaned up (best-effort) after runTierD returns");
 });
 
 // =============================================================================
@@ -548,6 +788,11 @@ test("node tier-d.js run --dry-run: full pipeline over a real scenario writes on
 
   const realRunsBefore = fs.existsSync(path.join(CLI_RUNS_ROOT, scenarioId));
   const realTierDResultsBefore = fs.existsSync(path.join(CLI_RUNS_ROOT, "tier-d-results.json"));
+  // Snapshot-and-compare rather than a blanket "does not exist" assertion --
+  // a real bench run may have already populated runs/tier-d/ on this machine
+  // (real pilot data, gitignored, never something a test should delete), so
+  // hermeticity here means "the dry-run didn't change it", not "it's empty".
+  const realTierDDirBefore = fs.existsSync(path.join(CLI_RUNS_ROOT, "tier-d"));
 
   try {
     await tierDMain(["run", "--scenario", scenarioId, "--dry-run"]);
@@ -558,12 +803,26 @@ test("node tier-d.js run --dry-run: full pipeline over a real scenario writes on
     assert.ok(entry, "the scoped scenario has a results entry");
     assert.ok([true, false, null].includes(entry.ideas_pass));
     assert.ok([true, false, null].includes(entry.brainstorming_pass));
+    assert.ok(entry.ideas_frac === null || typeof entry.ideas_frac === "number");
+    assert.ok(entry.brainstorming_frac === null || typeof entry.brainstorming_frac === "number");
     assert.ok(fs.existsSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d-details.json")));
 
-    // The dry-run sandbox itself was built under runs-dry/tier-d/.
+    // The dry-run sandbox itself is built OUTSIDE the data tree entirely (see
+    // lib/tierd.js's buildSandbox doc comment) -- runs-dry/tier-d/ only ever
+    // receives the bounded audit trail written back after the fact: the
+    // build's raw output and a bounded artifact snapshot, never the sandbox
+    // (and never SPEC.md, which is the input, not a built artifact).
     assert.ok(
-      fs.existsSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d", scenarioId, "ideas", "workspace", "SPEC.md")),
-      "dry-run sandbox was built under runs-dry/tier-d/"
+      fs.existsSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d", scenarioId, "ideas", "build-output.json")),
+      "the build's raw stdout/parsed text was persisted under runs-dry/tier-d/"
+    );
+    assert.ok(
+      fs.existsSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d", scenarioId, "ideas", "artifacts", "inventory.txt")),
+      "a bounded artifact snapshot was persisted under runs-dry/tier-d/<scenario>/<side>/artifacts/"
+    );
+    assert.ok(
+      !fs.existsSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d", scenarioId, "ideas", "workspace")),
+      "no workspace/ directory is ever created under the data tree -- the build never runs there"
     );
 
     // The real runs/ tree was never created or modified by this dry-run.
@@ -577,7 +836,11 @@ test("node tier-d.js run --dry-run: full pipeline over a real scenario writes on
       realTierDResultsBefore,
       "dry-run never writes runs/tier-d-results.json"
     );
-    assert.ok(!fs.existsSync(path.join(CLI_RUNS_ROOT, "tier-d")), "dry-run never creates runs/tier-d/");
+    assert.strictEqual(
+      fs.existsSync(path.join(CLI_RUNS_ROOT, "tier-d")),
+      realTierDDirBefore,
+      "dry-run never creates or modifies runs/tier-d/"
+    );
   } finally {
     fs.rmSync(path.join(CLI_RUNS_DRY_ROOT, scenarioId), { recursive: true, force: true });
     fs.rmSync(path.join(CLI_RUNS_DRY_ROOT, "tier-d", scenarioId), { recursive: true, force: true });

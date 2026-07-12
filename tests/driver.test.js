@@ -442,6 +442,12 @@ test("buildSimUserPrompt embeds the hidden doc, the full transcript so far, and 
   assert.match(prompt, /concise/i);
   assert.match(prompt, /looks good, approve/i);
   assert.match(prompt, /never approve while any question.+remains unanswered/i);
+  // sim-user leakage fix: never tease or hint that undisclosed information
+  // exists (the observed failure mode was the sim-user volunteering latent
+  // facts via "things you haven't asked about" style asides).
+  assert.match(prompt, /never offer a teaser/i);
+  assert.match(prompt, /haven't asked about/i);
+  assert.match(prompt, /never proactively/i);
 });
 
 test("buildSimUserPrompt on an empty transcript still produces a valid grounded prompt", () => {

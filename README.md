@@ -147,6 +147,21 @@ in code comments and in `report.md`:
   `transcript.error` records the message, and `transcript.json` is still written with
   whatever turns completed before the failure.
 
+## Sim-user protocol
+
+`lib/simuser.js`'s `buildSimUserPrompt` is the only lever this harness has over the
+simulated user's behavior -- it's a real model call, not code, so the protocol lives
+entirely in the prompt's numbered rules. Beyond the original rules (answer only what's
+asked, never rescue a wrap-up, stay grounded in the hidden doc, be concise, approve
+tersely only once every open question is answered), two rules specifically guard against
+**leakage**: a planted fact or latent constraint surfaces only when a question actually
+targets the specific area it concerns -- never proactively, never "while we're at it" --
+and the sim-user must never tease or hint that undisclosed information exists (e.g. it
+must never say anything like "there are a couple of things you haven't asked about").
+This closes an observed failure mode where the sim-user volunteered latent facts by
+offering exactly that kind of unprompted hint, undermining tier B's elicitation-skill
+measurement (a workflow that never had to ask still "found out").
+
 ## Tier D (automated) — downstream outcome
 
 Spec section 13 names tier D ("the same fixed executor implements from each spec with no
@@ -165,9 +180,16 @@ Per scenario x side (`ideas`, `brainstorming`):
    workspace. If no run in range qualifies (some scenario x side cells, e.g. s05 x
    brainstorming, plausibly never produce a spec at all), that side's pass is `null` with
    reason `"no spec produced"` -- never a guess.
-2. **Fresh sandbox.** `runs/tier-d/<scenario>/<side>/workspace` is wiped and recreated,
+2. **Fresh sandbox, built OUTSIDE the data tree.** The build happens in a fresh directory
+   under `os.tmpdir()` -- ONE per-invocation temp root per `tier-d.js run`, one
+   subdirectory per scenario/side underneath it -- never inside `runs/` or `runs-dry/`.
    `git init` best-effort, and the selected spec is copied in as `SPEC.md` (line endings
-   normalized).
+   normalized). This is an isolation fix: an earlier version built directly under
+   `runs/tier-d/<scenario>/<side>/workspace`, and a fixed executor's own build process
+   (which can run arbitrary build/test tooling inside its cwd) once destroyed real run
+   data (`runs/s03`..`s05`) that happened to sit nearby on that shared tree. The temp root
+   is removed (best-effort) once the whole `tier-d.js run` invocation finishes -- it is
+   disposable build scratch space, never the audit trail.
 3. **Fixed executor -- ONE call.** Pinned to `config.interviewee_model`,
    `--permission-mode acceptEdits`, prompt on stdin, `cwd` = the sandbox: "Implement the
    specification in SPEC.md, in this workspace. Work only from the spec; where it is
@@ -175,38 +197,66 @@ Per scenario x side (`ideas`, `brainstorming`):
    real, runnable code with tests where the spec calls for them. Do not ask questions -
    there is no user." It never sees the scenario's `hidden-doc.md` -- this is the whole
    point of tier D: the same executor, working only from what each workflow's interview
-   actually produced.
-4. **Checklist judge -- ONE call.** Pinned to `config.judge_model`. The prompt carries
-   the scenario's `acceptance.md` checklist verbatim plus a bounded inventory of the
-   built workspace (file tree + contents of source/docs files, capped at ~6000
-   characters per file and ~40000 characters total; `SPEC.md`, `.git/`, and
-   `node_modules/` are excluded; any truncation is disclosed honestly in the prompt, not
-   silently dropped). The judge decides required-vs-nice-to-have itself from each
-   item's text (a literal `"(Nice-to-have)"` marker means optional) and returns strict
-   JSON: `{"items": [{"text", "required", "verdict": "pass"|"fail"|"unverifiable"}, ...]}`.
-5. **Pass rule (pre-declared).** A side passes iff **every required item's verdict is
-   `"pass"`**. `"unverifiable"` is never a pass, and a failing/unverifiable nice-to-have
-   never blocks a pass. Per-item detail (every verdict, the spec run picked, any failure
-   reason) is written to `runs/tier-d-details.json` for audit; the summary
-   (`[{scenarioId, ideas_pass, brainstorming_pass}]`) is written to
-   `runs/tier-d-results.json`, which `node run.js report` already picks up automatically
-   -- run `report` again after `tier-d.js` to render the Tier D section with the paired
-   pass-rate table and an exact-binomial (sign test) p-value. Without that file,
-   `report.md` still renders Tier D as **"not run"**, plainly, rather than silently
-   omitting the section or implying a null result is a loss.
+   actually produced. The call's raw CLI stdout and parsed text are persisted to
+   `runs/tier-d/<scenario>/<side>/build-output.json` for forensics -- previously only the
+   judge's verdicts were kept, so a build that misbehaved left no trace of what the
+   executor actually said it did.
+4. **Bounded artifact snapshot.** Once the build completes, the same bounded workspace
+   inventory built for the judge prompt (file tree + contents of source/docs files, capped
+   at ~6000 characters per file and ~40000 characters total; `SPEC.md`, `.git/`, and
+   `node_modules/` excluded) is copied back into
+   `runs/tier-d/<scenario>/<side>/artifacts/inventory.txt` for audit -- the ONLY thing that
+   comes back from the disposable tmp sandbox into the data tree.
+5. **Checklist judge -- ONE call.** Pinned to `config.judge_model`. The prompt carries the
+   full `SPEC.md` text given to the executor, the scenario's `acceptance.md` checklist
+   verbatim, and the bounded workspace inventory, plus a **dual judging standard**: an item
+   describing BUILT BEHAVIOR is judged strictly against the workspace inventory ("pass"
+   only if the code actually does it), while an item describing a PROCESS, PLAN, ROLLOUT,
+   or COMPATIBILITY PROMISE is judged against the specification's stated plan instead
+   ("pass" if the spec explicitly and credibly commits to it, even if not yet built) -- the
+   same standard applied to whichever side produced the spec, so neither workflow is held
+   to a stricter reading than the other. This closes a fairness gap an analyst flagged:
+   without the spec text, any checklist item describing a process or compatibility promise
+   was unjudgeable from the built inventory alone and either failed or came back
+   unverifiable no matter how explicitly a spec committed to it. The judge decides
+   required-vs-nice-to-have itself from each item's text (a literal `"(Nice-to-have)"`
+   marker means optional) and returns strict JSON:
+   `{"items": [{"text", "required", "verdict": "pass"|"fail"|"unverifiable"}, ...]}`.
+6. **Pass rule (pre-declared) + graded metric.** A side's binary pass is still: **every
+   required item's verdict is `"pass"`**. `"unverifiable"` is never a pass, and a
+   failing/unverifiable nice-to-have never blocks a pass. Alongside it, a **graded
+   required-items pass fraction** (`required items passing / required total`; `null` when
+   there were zero required items or no judged items at all) fixes a floor effect: the
+   binary rate alone can't distinguish a side that nailed 9 of 10 required items from one
+   that nailed 0 of 10 -- both show up as a plain 0, a 0-vs-0 tie that hides a real gap.
+   Per-item detail (every verdict, the spec run picked, any failure reason) is written to
+   `runs/tier-d-details.json` for audit; the summary
+   (`[{scenarioId, ideas_pass, brainstorming_pass, ideas_frac, brainstorming_frac}]` -- the
+   two `_frac` fields are optional and back-compat with a pre-existing results file that
+   never carried them) is written to `runs/tier-d-results.json`, which
+   `node run.js report` already picks up automatically -- run `report` again after
+   `tier-d.js` to render the Tier D section with the paired binary pass-rate table, the
+   graded pass-fraction table (rendered only when at least one entry supplies fracs), and
+   an exact-binomial (sign test) p-value on the binary rate. Without that file, `report.md`
+   still renders Tier D as **"not run"**, plainly, rather than silently omitting the
+   section or implying a null result is a loss. The success bar's tier D match-or-beat gate
+   uses the graded fraction when it carries usable paired data, falling back to the binary
+   rate otherwise -- `report.md` discloses which basis it used.
 
 Parsing is defensive throughout, matching the rest of this harness's honesty invariants:
 a malformed judge response, a failed executor call, or a failed judge call all produce
-`pass: null` for that side plus a recorded reason -- never a fabricated verdict.
+`pass: null` (and `frac: null`) for that side plus a recorded reason -- never a fabricated
+verdict.
 
 **Cost note.** Two build sessions (one fixed-executor call per side) plus two judge calls
 per scenario -- 4 `claude -p` invocations per scenario, independent of `run`/`score`'s own
 cost (see "Cost expectations" above).
 
-`--dry-run` drives the identical pipeline against an in-process scripted fake executor,
-writing under `runs-dry/tier-d/` (and `runs-dry/tier-d-results.json` /
-`runs-dry/tier-d-details.json`) instead of `runs/` -- zero network, exit 0, same
-segregation guarantee as `run.js`'s own `--dry-run`.
+`--dry-run` drives the identical pipeline against an in-process scripted fake executor --
+the build sandbox itself still lives under `os.tmpdir()`, never under `runs-dry/` -- writing
+its audit trail (`build-output.json`, `artifacts/`) under `runs-dry/tier-d/` (and
+`runs-dry/tier-d-results.json` / `runs-dry/tier-d-details.json`) instead of `runs/` -- zero
+network, exit 0, same segregation guarantee as `run.js`'s own `--dry-run`.
 
 ## Pinned versions
 
@@ -240,7 +290,10 @@ Quoted verbatim from `docs/specs/2026-07-08-ideas-design.md` section 13:
 pre-declared conditions: >=30% fewer output tokens per spec AND a tier C composite that
 matches or beats brainstorming AND strictly lower simulated-user burden ("imposing lower
 user burden" -- lower, not lower-or-equal, so an exact tie does not pass) AND (when a
-`tier-d-results.json` is present) a tier D pass rate that matches or beats brainstorming.
+`tier-d-results.json` is present) a tier D pass rate that matches or beats brainstorming --
+using the graded required-items pass fraction when the results file supplies it (see "Tier
+D (automated)" above), falling back to the binary pass rate otherwise; the "Tier D
+match-or-beat" bullet in `report.md` discloses which basis was used.
 **WHEN the output-tokens family, the tier C composite family, or the user-burden family
 is entirely null** (every scenario's paired value missing), the verdict is
 **INSUFFICIENT-DATA** -- never a silently-favorable PASS or FAIL built on no data. When no
