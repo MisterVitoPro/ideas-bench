@@ -2,7 +2,7 @@
 
 The paired, blind, simulated-user benchmark comparing `/ideas:interview` against
 `superpowers:brainstorming`, per the ideas plugin's design spec measurement section
-([docs/specs/2026-07-08-ideas-design.md, section 13](https://github.com/MisterVitoPro/ideas/blob/main/docs/specs/2026-07-08-ideas-design.md)).
+([docs/specs/2026-07-08-ideas-design.md, section 13](https://github.com/MisterVitoPro/ideas/blob/v0.3.1/docs/specs/2026-07-08-ideas-design.md)).
 By MisterVitoPro.
 
 This harness lives in its own repo so the [ideas plugin](https://github.com/MisterVitoPro/ideas)
@@ -279,7 +279,7 @@ included, see `lib/driver.js`'s `tryGitInit`) -- best-effort, never a hard depen
 
 ## Pre-declared success bar
 
-Quoted verbatim from `docs/specs/2026-07-08-ideas-design.md` section 13:
+Quoted verbatim from the ideas design spec, section 13 (preserved at tag v0.3.1 in the ideas repo):
 
 > ideas must match or beat brainstorming on tier D pass rate and the tier C composite,
 > while spending at least 30% fewer output tokens per spec and imposing lower user
